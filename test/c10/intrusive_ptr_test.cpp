@@ -176,10 +176,29 @@ TEST(IntrusivePtr, Release) {
   auto* raw = p.release();
   EXPECT_EQ(p.get(), nullptr);
   EXPECT_EQ(raw->value, 42);
-  // Manually clean up — we took ownership away from the smart pointer.
-  // The refcount is still 1, so we wrap it again to trigger cleanup.
-  c10::intrusive_ptr<TestObject> cleanup(raw);
-  // cleanup's destructor will delete it.
+  // release() transfers the existing strong ref to the caller.
+  // Use reclaim() to re-wrap without double-incrementing.
+  auto cleanup = c10::intrusive_ptr<TestObject>::reclaim(raw);
+  EXPECT_EQ(cleanup.use_count(), 1u);
+  // cleanup's destructor will destroy + free it.
+}
+
+TEST(IntrusivePtr, Reclaim) {
+  bool destroyed = false;
+  auto p = c10::make_intrusive<DestTracker>(&destroyed);
+  EXPECT_EQ(p.use_count(), 1u);
+
+  auto* raw = p.release();
+  EXPECT_EQ(p.get(), nullptr);
+  EXPECT_FALSE(destroyed);
+
+  // reclaim() adopts the existing ref — no increment.
+  auto p2 = c10::intrusive_ptr<DestTracker>::reclaim(raw);
+  EXPECT_EQ(p2.use_count(), 1u);
+  EXPECT_FALSE(destroyed);
+
+  p2.reset();
+  EXPECT_TRUE(destroyed);
 }
 
 TEST(IntrusivePtr, Swap) {

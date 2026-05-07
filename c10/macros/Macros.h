@@ -62,7 +62,13 @@
 // ---------------------------------------------------------------------------
 
 // Suppress unused-variable warnings.
+#if defined(C10_COMPILER_GCC) || defined(C10_COMPILER_CLANG)
 #define C10_UNUSED __attribute__((unused))
+#elif defined(C10_COMPILER_MSVC)
+#define C10_UNUSED __pragma(warning(suppress : 4100 4101))
+#else
+#define C10_UNUSED
+#endif
 
 // Hint to the compiler that a branch is likely/unlikely.
 #if defined(C10_COMPILER_GCC) || defined(C10_COMPILER_CLANG)

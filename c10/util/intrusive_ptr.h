@@ -123,6 +123,8 @@ class intrusive_ptr final {
       std::is_base_of<intrusive_ptr_target, TTarget>::value,
       "intrusive_ptr<T> requires T to derive from intrusive_ptr_target");
 
+  using element_type = TTarget;
+
   // ------------------------------------------------------------------
   // Constructors
   // ------------------------------------------------------------------
@@ -232,13 +234,28 @@ class intrusive_ptr final {
   // Modifiers
   // ------------------------------------------------------------------
 
-  /// Release ownership and return the raw pointer.
-  /// The caller is responsible for eventually calling release or
-  /// wrapping it back in an intrusive_ptr.
+  /// Release ownership and return the raw pointer WITHOUT decrementing
+  /// the reference count.  The caller now owns that one strong reference
+  /// and is responsible for eventually calling reclaim() or manually
+  /// managing the lifetime.
+  ///
+  /// WARNING: Do NOT pass the returned pointer to the normal constructor
+  /// — that would double-increment the refcount.  Use reclaim() instead.
   TTarget* release() noexcept {
     TTarget* tmp = target_;
     target_ = nullptr;
     return tmp;
+  }
+
+  /// Adopt a raw pointer that already has its refcount incremented
+  /// (e.g., obtained from release()).  Does NOT increment the refcount.
+  ///
+  ///   auto* raw = ptr.release();
+  ///   /* ... */
+  ///   auto ptr2 = intrusive_ptr<T>::reclaim(raw);  // takes ownership
+  ///
+  static intrusive_ptr reclaim(TTarget* target) noexcept {
+    return intrusive_ptr(target, detail::DontIncreaseRefcount{});
   }
 
   /// Replace the managed object.
