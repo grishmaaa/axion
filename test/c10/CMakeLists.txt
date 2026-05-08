@@ -21,3 +21,7 @@ gtest_discover_tests(allocator_test)
 add_executable(cpu_allocator_test cpu_allocator_test.cpp)
 target_link_libraries(cpu_allocator_test PRIVATE c10 GTest::gtest_main)
 gtest_discover_tests(cpu_allocator_test)
+
+add_executable(storage_impl_test storage_impl_test.cpp)
+target_link_libraries(storage_impl_test PRIVATE c10 GTest::gtest_main)
+gtest_discover_tests(storage_impl_test)
