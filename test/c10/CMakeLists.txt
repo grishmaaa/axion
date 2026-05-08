@@ -17,3 +17,7 @@ gtest_discover_tests(dataptr_test)
 add_executable(allocator_test allocator_test.cpp)
 target_link_libraries(allocator_test PRIVATE c10 GTest::gtest_main)
 gtest_discover_tests(allocator_test)
+
+add_executable(cpu_allocator_test cpu_allocator_test.cpp)
+target_link_libraries(cpu_allocator_test PRIVATE c10 GTest::gtest_main)
+gtest_discover_tests(cpu_allocator_test)
