@@ -17,3 +17,4 @@ include(GoogleTest)
 
 # Pull in per-layer test directories.
 add_subdirectory(c10)
+add_subdirectory(aten)

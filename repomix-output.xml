@@ -1,0 +1,4635 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+aten/
+  CMakeLists.txt
+autograd/
+  CMakeLists.txt
+axion/
+  CMakeLists.txt
+benchmarks/
+  CMakeLists.txt
+c10/
+  core/
+    Allocator.h
+    AllocatorRegistry.cpp
+    AllocatorRegistry.h
+    CPUAllocator.cpp
+    CPUAllocator.h
+    DataPtr.h
+    Device.h
+    DeviceType.h
+    ScalarType.h
+    Storage.h
+    StorageImpl.cpp
+    StorageImpl.h
+    Tensor.h
+    TensorImpl.cpp
+    TensorImpl.h
+  macros/
+    Macros.h
+  util/
+    intrusive_ptr.h
+  CMakeLists.txt
+examples/
+  CMakeLists.txt
+test/
+  c10/
+    allocator_test.cpp
+    CMakeLists.txt
+    cpu_allocator_test.cpp
+    dataptr_test.cpp
+    device_test.cpp
+    intrusive_ptr_test.cpp
+    storage_impl_test.cpp
+    storage_test.cpp
+    tensor_impl_test.cpp
+    tensor_test.cpp
+  CMakeLists.txt
+.clang-format
+.gitignore
+CMakeLists.txt
+README.md
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="aten/CMakeLists.txt">
+# ============================================================================
+# aten — Tensor library (placeholder)
+# ============================================================================
+add_library(aten INTERFACE)
+target_include_directories(aten INTERFACE ${CMAKE_SOURCE_DIR})
+target_link_libraries(aten INTERFACE c10)
+</file>
+
+<file path="autograd/CMakeLists.txt">
+# ============================================================================
+# autograd — Automatic differentiation (placeholder)
+# ============================================================================
+add_library(autograd INTERFACE)
+target_include_directories(autograd INTERFACE ${CMAKE_SOURCE_DIR})
+target_link_libraries(autograd INTERFACE aten)
+</file>
+
+<file path="axion/CMakeLists.txt">
+# ============================================================================
+# axion — User-facing API (placeholder)
+# ============================================================================
+add_library(axion INTERFACE)
+target_include_directories(axion INTERFACE ${CMAKE_SOURCE_DIR})
+target_link_libraries(axion INTERFACE autograd)
+</file>
+
+<file path="benchmarks/CMakeLists.txt">
+# ============================================================================
+# benchmarks — (placeholder)
+# ============================================================================
+</file>
+
+<file path="c10/core/Allocator.h">
+#pragma once
+
+// ============================================================================
+// Axion / c10 — Allocator
+// ============================================================================
+//
+// Pure abstract interface — the contract every allocator must fulfill.
+//
+// The framework talks ONLY to this interface, never to concrete allocators.
+// StorageImpl holds an Allocator*, not a CPUAllocator* or CUDAAllocator*.
+// That means adding a new allocator (pool, arena, CUDA, Metal) never
+// requires modifying StorageImpl.
+//
+// Three capabilities:
+//
+//   allocate(nbytes)   — core method: returns a DataPtr owning the memory
+//   raw_deleter()      — the deleter function this allocator uses
+//   raw_allocate()     — convenience: allocate + unwrap to raw pointer
+//   raw_deallocate()   — convenience: free a raw pointer via raw_deleter()
+//
+// Allocators are not copyable or movable — they are singletons or
+// externally managed objects, not value types.
+
+#include <cstddef>
+
+#include "c10/core/DataPtr.h"
+#include "c10/core/Device.h"
+#include "c10/macros/Macros.h"
+
+namespace c10 {
+
+class C10_API Allocator {
+ public:
+  virtual ~Allocator() = default;
+
+  // ------------------------------------------------------------------
+  // Pure virtual — every concrete allocator must implement these
+  // ------------------------------------------------------------------
+
+  /// Allocate `nbytes` of memory.
+  /// Returns a DataPtr fully owning the allocation with the correct
+  /// deleter already attached.
+  ///
+  /// nbytes == 0 is valid — returns a DataPtr with a null data pointer
+  /// and a valid deleter.  Must not crash.
+  virtual DataPtr allocate(size_t nbytes) const = 0;
+
+  /// Return the deleter function this allocator uses for raw pointers.
+  ///
+  /// Needed for cases where memory arrived from outside — not through
+  /// allocate() — but still needs to be freed correctly.  StorageImpl
+  /// uses this when wrapping externally provided memory.
+  virtual Deleter raw_deleter() const = 0;
+
+  // ------------------------------------------------------------------
+  // Convenience helpers — built on top of the pure virtuals
+  // ------------------------------------------------------------------
+
+  /// Allocate and return the raw pointer.
+  /// The caller takes ownership — must call raw_deallocate() to free.
+  void* raw_allocate(size_t nbytes) const {
+    auto dptr = allocate(nbytes);
+    return dptr.release_context();
+  }
+
+  /// Free a raw pointer using this allocator's deleter.
+  void raw_deallocate(void* ptr) const {
+    auto del = raw_deleter();
+    if (del && ptr) {
+      del(ptr);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Non-copyable, non-movable — allocators are singletons
+  // ------------------------------------------------------------------
+  Allocator(const Allocator&) = delete;
+  Allocator& operator=(const Allocator&) = delete;
+  Allocator(Allocator&&) = delete;
+  Allocator& operator=(Allocator&&) = delete;
+
+ protected:
+  // Only subclasses can construct.
+  Allocator() = default;
+};
+
+}  // namespace c10
+</file>
+
+<file path="c10/core/AllocatorRegistry.cpp">
+// ============================================================================
+// Axion / c10 — AllocatorRegistry implementation
+// ============================================================================
+//
+// This is the first .cpp file in c10/core/.  After this, CMake will
+// build c10 as a STATIC library instead of INTERFACE (header-only).
+//
+// The registry is a fixed-size array — one slot per DeviceType.
+// Currently supports CPU(0) and CUDA(1), with room for 8 total.
+// No mutex — registration happens at static init time before any
+// concurrent access.
+
+#include "c10/core/AllocatorRegistry.h"
+
+#include <array>
+#include <cassert>
+
+namespace c10 {
+
+namespace {
+
+// Fixed-size array indexed by DeviceType underlying int8_t value.
+// 8 slots is more than enough for foreseeable device types.
+constexpr int kMaxDeviceTypes = 8;
+std::array<Allocator*, kMaxDeviceTypes> g_allocators = {};
+
+}  // namespace
+
+void RegisterAllocator(DeviceType t, Allocator* allocator) {
+  auto idx = static_cast<int>(t);
+  assert(idx >= 0 && idx < kMaxDeviceTypes &&
+         "DeviceType index out of range for allocator registry");
+  g_allocators[static_cast<size_t>(idx)] = allocator;
+}
+
+Allocator* GetAllocator(DeviceType t) {
+  auto idx = static_cast<int>(t);
+  if (idx < 0 || idx >= kMaxDeviceTypes) {
+    return nullptr;
+  }
+  return g_allocators[static_cast<size_t>(idx)];
+}
+
+}  // namespace c10
+</file>
+
+<file path="c10/core/AllocatorRegistry.h">
+#pragma once
+
+// ============================================================================
+// Axion / c10 — AllocatorRegistry
+// ============================================================================
+//
+// Global lookup table: DeviceType → Allocator*.
+//
+// At startup, before any tensor is created, concrete allocators register
+// themselves via RegisterAllocator().  From then on the rest of the framework
+// calls GetAllocator(DeviceType::CPU) and gets back whatever was registered.
+//
+// Implementation: fixed-size array indexed by the DeviceType integer value.
+// Not a map, not a hash table.  DeviceType has at most a handful of values.
+// Array lookup is zero overhead — no reason to pay map overhead for
+// something called on every tensor construction.
+
+#include "c10/core/Allocator.h"
+#include "c10/core/Device.h"
+#include "c10/macros/Macros.h"
+
+namespace c10 {
+
+/// Register an allocator for a device type.
+/// Only one allocator per DeviceType — second registration overwrites
+/// the first.  Typically called at static init time.
+C10_API void RegisterAllocator(DeviceType t, Allocator* allocator);
+
+/// Retrieve the allocator for a device type.
+/// Returns nullptr if none registered.
+C10_API Allocator* GetAllocator(DeviceType t);
+
+/// Convenience overload — takes a full Device, extracts the type.
+inline Allocator* GetAllocator(Device d) {
+  return GetAllocator(d.type);
+}
+
+}  // namespace c10
+</file>
+
+<file path="c10/core/CPUAllocator.cpp">
+// ============================================================================
+// Axion / c10 — CPUAllocator implementation
+// ============================================================================
+
+#include "c10/core/CPUAllocator.h"
+
+#include <cstdlib>
+#include <cstring>
+
+#include "c10/core/AllocatorRegistry.h"
+
+namespace c10 {
+
+// ----------------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------------
+
+namespace {
+
+/// Round `n` up to the next multiple of `alignment`.
+/// alignment must be a power of two.
+inline size_t roundUpToAlignment(size_t n, size_t alignment) {
+  return (n + alignment - 1) & ~(alignment - 1);
+}
+
+}  // namespace
+
+// ----------------------------------------------------------------------------
+// CPUAllocator implementation
+// ----------------------------------------------------------------------------
+
+DataPtr CPUAllocator::allocate(size_t nbytes) const {
+  if (nbytes == 0) {
+    // Zero-size: return a valid but empty DataPtr.
+    // Do NOT call malloc(0) — its return value is implementation-defined.
+    return DataPtr(nullptr, nullptr, deleteCPU, Device::cpu());
+  }
+
+  // aligned_alloc requires size to be a multiple of alignment.
+  size_t alloc_size = roundUpToAlignment(nbytes, kCPUAlignment);
+  void* ptr = std::aligned_alloc(kCPUAlignment, alloc_size);
+
+  if (!ptr) {
+    // Allocation failed.  In a production framework you'd throw;
+    // for now return a null DataPtr so the caller can check.
+    return DataPtr(nullptr, nullptr, deleteCPU, Device::cpu());
+  }
+
+  // Zero-initialize for safety — prevents reading uninitialized memory.
+  std::memset(ptr, 0, alloc_size);
+
+  return DataPtr(ptr, deleteCPU, Device::cpu());
+}
+
+Deleter CPUAllocator::raw_deleter() const {
+  return deleteCPU;
+}
+
+// ----------------------------------------------------------------------------
+// Global singleton and self-registration
+// ----------------------------------------------------------------------------
+
+CPUAllocator* GetCPUAllocator() {
+  // Meyer's singleton — constructed on first call, destroyed at exit.
+  static CPUAllocator instance;
+  return &instance;
+}
+
+namespace {
+
+// Self-registration at static init time.
+// Before main() runs, the CPUAllocator registers itself into the
+// AllocatorRegistry for DeviceType::CPU.
+struct CPUAllocatorRegistrar {
+  CPUAllocatorRegistrar() {
+    RegisterAllocator(DeviceType::CPU, GetCPUAllocator());
+  }
+};
+
+static CPUAllocatorRegistrar g_cpu_allocator_registrar;
+
+}  // namespace
+
+}  // namespace c10
+</file>
+
+<file path="c10/core/CPUAllocator.h">
+#pragma once
+
+// ============================================================================
+// Axion / c10 — CPUAllocator
+// ============================================================================
+//
+// First concrete Allocator implementation.  Allocates 64-byte-aligned
+// memory on the CPU heap via aligned_alloc and frees it via free().
+//
+// 64-byte alignment covers:
+//   - Cache line size on x86 (avoids false sharing)
+//   - SSE (16B), AVX (32B), AVX-512 (64B) SIMD requirements
+//   - Good default for DMA / CUDA host-pinned transfers
+//
+// Self-registers into AllocatorRegistry at static initialization time
+// for DeviceType::CPU — the rest of the framework calls
+// GetAllocator(DeviceType::CPU) and gets this back automatically.
+//
+// DESIGN NOTE — why aligned_alloc over posix_memalign:
+//   aligned_alloc is C11/C++17 standard, portable.
+//   posix_memalign is POSIX-only.  Both free() correctly on Linux.
+
+#include "c10/core/Allocator.h"
+#include "c10/macros/Macros.h"
+
+namespace c10 {
+
+/// Cache-line alignment for all CPU tensor data.
+constexpr size_t kCPUAlignment = 64;
+
+class C10_API CPUAllocator final : public Allocator {
+ public:
+  /// Allocate `nbytes` of 64-byte-aligned CPU memory.
+  ///
+  /// Zero size:  returns an empty DataPtr (null data, valid device).
+  ///             Does NOT call malloc(0) — behavior is implementation-defined.
+  ///
+  /// Non-zero:   rounds up to a multiple of kCPUAlignment (required by
+  ///             aligned_alloc), allocates, returns DataPtr with deleteCPU.
+  DataPtr allocate(size_t nbytes) const override;
+
+  /// Returns deleteCPU — calls free().
+  Deleter raw_deleter() const override;
+};
+
+/// Returns the global singleton CPUAllocator instance.
+C10_API CPUAllocator* GetCPUAllocator();
+
+}  // namespace c10
+</file>
+
+<file path="c10/core/DataPtr.h">
+#pragma once
+
+// ============================================================================
+// Axion / c10 — DataPtr
+// ============================================================================
+//
+// DataPtr is the lowest-level memory ownership primitive in the framework.
+// It owns exactly one allocation and is responsible for freeing it when
+// it goes out of scope or is explicitly cleared.
+//
+// It is NOT a tensor, NOT storage — just a non-copyable, movable wrapper
+// around a raw pointer and its deleter.
+//
+// KEY DESIGN DECISIONS
+// --------------------
+//
+//  1. Four fields:
+//       data_   — the pointer the user reads/writes through
+//       ctx_    — the context pointer passed to the deleter
+//       del_    — void(*)(void*) function pointer, receives ctx_
+//       device_ — Device struct describing where this memory lives
+//
+//  2. data_ and ctx_ are separate to support pool allocators:
+//       For simple allocators (malloc), data_ == ctx_.
+//       For pool allocators, data_ is an offset into a block,
+//       but ctx_ carries whatever the deleter needs to free correctly.
+//       The deleter always receives ctx_, never data_.
+//
+//  3. Ownership rules:
+//       Not copyable — two owners = double free.
+//       Movable — ownership transfers cleanly, source becomes null.
+//       Destructor calls del_(ctx_) iff both are non-null.
+//
+//  4. DataPtr does NOT allocate memory.  The allocator layer above it
+//     calls malloc/cudaMalloc and constructs a DataPtr with the result.
+
+#include <cstdlib>
+#include <utility>
+
+#include "c10/core/Device.h"
+#include "c10/macros/Macros.h"
+
+namespace c10 {
+
+// ============================================================================
+// Default deleters
+// ============================================================================
+
+/// No-op deleter for borrowed (non-owning) pointers.
+/// Use this when the DataPtr should observe but not free memory.
+inline void deleteNothing(void* /*ctx*/) noexcept {}
+
+/// Standard CPU deleter — calls free().
+/// Pairs with memory obtained from malloc/calloc/realloc.
+inline void deleteCPU(void* ctx) noexcept {
+  std::free(ctx);
+}
+
+// ============================================================================
+// DataPtr
+// ============================================================================
+
+/// Deleter function type: receives the context pointer, frees it.
+using Deleter = void (*)(void*);
+
+class C10_API DataPtr {
+ public:
+  // ------------------------------------------------------------------
+  // Constructors
+  // ------------------------------------------------------------------
+
+  /// Default — null pointer, no deleter, CPU device.
+  DataPtr() noexcept
+      : data_(nullptr),
+        ctx_(nullptr),
+        del_(nullptr),
+        device_(DeviceType::CPU, 0) {}
+
+  /// Convenience constructor — data and ctx are the same pointer.
+  /// Use this for simple malloc/free allocations.
+  ///
+  ///   void* raw = std::malloc(1024);
+  ///   DataPtr ptr(raw, deleteCPU, Device::cpu());
+  ///
+  DataPtr(void* data, Deleter del, Device device) noexcept
+      : data_(data), ctx_(data), del_(del), device_(device) {}
+
+  /// Full constructor — data and ctx are separate.
+  /// Use this for pool allocators where the user-visible pointer
+  /// differs from what the deleter needs.
+  ///
+  ///   void* block = pool.allocate(4096);
+  ///   void* user  = static_cast<char*>(block) + offset;
+  ///   DataPtr ptr(user, block, poolDeleter, Device::cpu());
+  ///
+  DataPtr(void* data, void* ctx, Deleter del, Device device) noexcept
+      : data_(data), ctx_(ctx), del_(del), device_(device) {}
+
+  // ------------------------------------------------------------------
+  // Non-copyable
+  // ------------------------------------------------------------------
+  C10_DISABLE_COPY(DataPtr);
+
+  // ------------------------------------------------------------------
+  // Movable — ownership transfers, source becomes null
+  // ------------------------------------------------------------------
+
+  DataPtr(DataPtr&& other) noexcept
+      : data_(other.data_),
+        ctx_(other.ctx_),
+        del_(other.del_),
+        device_(other.device_) {
+    other.data_ = nullptr;
+    other.ctx_ = nullptr;
+    other.del_ = nullptr;
+  }
+
+  DataPtr& operator=(DataPtr&& other) noexcept {
+    if (this != &other) {
+      // Free our current allocation first.
+      free_();
+      data_ = other.data_;
+      ctx_ = other.ctx_;
+      del_ = other.del_;
+      device_ = other.device_;
+      other.data_ = nullptr;
+      other.ctx_ = nullptr;
+      other.del_ = nullptr;
+    }
+    return *this;
+  }
+
+  // ------------------------------------------------------------------
+  // Destructor — calls del_(ctx_) if both are non-null
+  // ------------------------------------------------------------------
+
+  ~DataPtr() noexcept { free_(); }
+
+  // ------------------------------------------------------------------
+  // Accessors
+  // ------------------------------------------------------------------
+
+  /// The pointer the user reads/writes through.
+  void* get() const noexcept { return data_; }
+
+  /// The context pointer that will be passed to the deleter.
+  void* get_context() const noexcept { return ctx_; }
+
+  /// The deleter function.
+  Deleter get_deleter() const noexcept { return del_; }
+
+  /// Where this memory lives.
+  Device device() const noexcept { return device_; }
+
+  /// Boolean conversion — true if data_ is non-null.
+  explicit operator bool() const noexcept { return data_ != nullptr; }
+
+  // ------------------------------------------------------------------
+  // Modifiers
+  // ------------------------------------------------------------------
+
+  /// Free immediately and null all fields.
+  /// Safe to call multiple times — second call is a no-op.
+  void clear() noexcept {
+    free_();
+    data_ = nullptr;
+    ctx_ = nullptr;
+    del_ = nullptr;
+  }
+
+  /// Release the context pointer WITHOUT calling the deleter.
+  /// The caller takes responsibility for freeing the memory.
+  /// Returns the context pointer; all internal fields are nulled.
+  void* release_context() noexcept {
+    void* ctx = ctx_;
+    data_ = nullptr;
+    ctx_ = nullptr;
+    del_ = nullptr;
+    return ctx;
+  }
+
+ private:
+  /// Call the deleter if both del_ and ctx_ are non-null,
+  /// then null out ctx_ and del_ to prevent double-free.
+  void free_() noexcept {
+    if (del_ && ctx_) {
+      del_(ctx_);
+    }
+    // Null out to prevent double-free if free_() is called again
+    // (e.g., clear() followed by destructor).
+    ctx_ = nullptr;
+    del_ = nullptr;
+  }
+
+  void* data_;
+  void* ctx_;
+  Deleter del_;
+  Device device_;
+};
+
+}  // namespace c10
+</file>
+
+<file path="c10/core/Device.h">
+#pragma once
+
+#include <cstdint>
+#include "c10/core/DeviceType.h"
+#include "c10/macros/Macros.h"
+
+namespace c10 {
+
+// Device is a lightweight value type that represents a physical hardware location.
+// It consists of a type (CPU, CUDA, etc.) and an index (for multi-device backends).
+//
+// DESIGN DECISIONS:
+// 1. Lightweight: 2 bytes total (int8_t type + int8_t index).
+// 2. Value Semantics: Copying a Device is as cheap as copying a short.
+// 3. No Polymorphism: Avoids virtual dispatch overhead for such a fundamental type.
+struct C10_API Device {
+  DeviceType type;
+  int8_t index; // -1 means default device, >= 0 means specific device index.
+
+  // Constructor
+  // For CPU, index is generally ignored but stored as 0 for consistency.
+  explicit Device(DeviceType t, int8_t i = 0) noexcept : type(t), index(i) {}
+
+  // Convenience static factories
+  static Device cpu() noexcept { return Device(DeviceType::CPU, 0); }
+  static Device cuda(int8_t i = 0) noexcept { return Device(DeviceType::CUDA, i); }
+
+  // Type queries
+  bool is_cpu() const noexcept { return type == DeviceType::CPU; }
+  bool is_cuda() const noexcept { return type == DeviceType::CUDA; }
+
+  // Equality operators
+  bool operator==(const Device& other) const noexcept {
+    return type == other.type && index == other.index;
+  }
+  bool operator!=(const Device& other) const noexcept {
+    return !(*this == other);
+  }
+
+  // String representation of the device type
+  const char* str() const noexcept { return DeviceTypeName(type); }
+};
+
+} // namespace c10
+</file>
+
+<file path="c10/core/DeviceType.h">
+#pragma once
+#include <cstdint>
+#include "c10/macros/Macros.h"
+
+namespace c10 {
+
+// DeviceType defines the supported hardware backends.
+// We use a fixed-width integer (int8_t) for compact storage in the Device struct.
+enum class C10_API DeviceType : int8_t {
+  CPU = 0,
+  CUDA = 1,
+  // Future-proofing: HIP, XPU, Metal, etc. can be added here.
+};
+
+// Returns a human-readable string representation of the DeviceType.
+// Useful for logging, error messages, and debugging.
+inline const char* DeviceTypeName(DeviceType t) noexcept {
+  switch (t) {
+    case DeviceType::CPU:
+      return "cpu";
+    case DeviceType::CUDA:
+      return "cuda";
+    default:
+      return "unknown";
+  }
+}
+
+} // namespace c10
+</file>
+
+<file path="c10/core/ScalarType.h">
+#pragma once
+
+#include <cstdint>
+#include <cstddef>
+
+#include "c10/macros/Macros.h"
+
+namespace c10 {
+
+/**
+ * ScalarType represents the data type of the elements in a Tensor.
+ */
+enum class ScalarType : int8_t {
+  Float32,
+  Float64,
+  Int32,
+  Int64,
+  Int8,
+  UInt8,
+  BFloat16,
+  Float16,
+  Undefined,
+};
+
+/**
+ * Returns the size in bytes for a given ScalarType.
+ */
+inline size_t elementSize(ScalarType type) {
+  switch (type) {
+    case ScalarType::Float32:
+      return 4;
+    case ScalarType::Float64:
+      return 8;
+    case ScalarType::Int32:
+      return 4;
+    case ScalarType::Int64:
+      return 8;
+    case ScalarType::Int8:
+      return 1;
+    case ScalarType::UInt8:
+      return 1;
+    case ScalarType::BFloat16:
+      return 2;
+    case ScalarType::Float16:
+      return 2;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Returns a human-readable name for the ScalarType.
+ */
+inline const char* toString(ScalarType type) {
+  switch (type) {
+    case ScalarType::Float32:
+      return "Float32";
+    case ScalarType::Float64:
+      return "Float64";
+    case ScalarType::Int32:
+      return "Int32";
+    case ScalarType::Int64:
+      return "Int64";
+    case ScalarType::Int8:
+      return "Int8";
+    case ScalarType::UInt8:
+      return "UInt8";
+    case ScalarType::BFloat16:
+      return "BFloat16";
+    case ScalarType::Float16:
+      return "Float16";
+    default:
+      return "Undefined";
+  }
+}
+
+} // namespace c10
+</file>
+
+<file path="c10/core/Storage.h">
+#pragma once
+
+// ============================================================================
+// Axion / c10 — Storage
+// ============================================================================
+//
+// A thin intrusive_ptr wrapper around StorageImpl.
+//
+// StorageImpl is the actual object — owns memory, tracks size, holds the
+// allocator.  Storage is just the handle that users and TensorImpl hold
+// to reach StorageImpl safely with automatic reference counting.
+//
+// Two Storage objects pointing at the same StorageImpl share ownership.
+// When the last one dies the StorageImpl is destroyed and memory freed.
+//
+// This pattern repeats at every level: Tensor wraps TensorImpl the same way.
+
+#include <utility>
+
+#include "c10/core/Allocator.h"
+#include "c10/core/DataPtr.h"
+#include "c10/core/Device.h"
+#include "c10/core/StorageImpl.h"
+#include "c10/macros/Macros.h"
+#include "c10/util/intrusive_ptr.h"
+
+namespace c10 {
+
+class C10_API Storage {
+ public:
+  // ------------------------------------------------------------------
+  // Constructors
+  // ------------------------------------------------------------------
+
+  /// Default — invalid/null storage.
+  Storage() = default;
+
+  /// Wrap an existing intrusive_ptr<StorageImpl>.
+  explicit Storage(intrusive_ptr<StorageImpl> impl) noexcept
+      : impl_(std::move(impl)) {}
+
+  /// Wrap a raw StorageImpl pointer (takes a new strong reference).
+  explicit Storage(StorageImpl* impl) noexcept : impl_(impl) {}
+
+  // ------------------------------------------------------------------
+  // Factories
+  // ------------------------------------------------------------------
+
+  /// Allocate fresh storage: `nbytes` of memory from `allocator`.
+  ///
+  ///   auto s = Storage::create(1024, GetCPUAllocator());
+  ///
+  static Storage create(size_t nbytes, Allocator* allocator) {
+    return Storage(make_intrusive<StorageImpl>(nbytes, allocator));
+  }
+
+  /// Wrap externally-provided memory via a DataPtr.
+  ///
+  ///   auto s = Storage::wrap(size, std::move(dp), nullptr);
+  ///
+  static Storage wrap(size_t nbytes, DataPtr data,
+                      Allocator* allocator = nullptr) {
+    return Storage(
+        make_intrusive<StorageImpl>(nbytes, std::move(data), allocator));
+  }
+
+  // ------------------------------------------------------------------
+  // Forwarding accessors — all delegate to StorageImpl
+  // ------------------------------------------------------------------
+
+  /// Raw pointer to the start of the buffer.
+  void* data() const noexcept { return impl_->data(); }
+
+  /// Number of bytes allocated.
+  size_t nbytes() const noexcept { return impl_->nbytes(); }
+
+  /// Where this memory lives.
+  Device device() const noexcept { return impl_->device(); }
+
+  /// The allocator that produced this memory (may be null).
+  Allocator* allocator() const noexcept { return impl_->allocator(); }
+
+  /// Whether this storage can be resized.
+  bool resizable() const noexcept { return impl_->resizable(); }
+
+  // ------------------------------------------------------------------
+  // Modifiers — forwarded to StorageImpl
+  // ------------------------------------------------------------------
+
+  /// Resize the underlying storage.
+  void resize(size_t new_nbytes) { impl_->resize(new_nbytes); }
+
+  /// Set the resizable flag.
+  void set_resizable(bool resizable) noexcept {
+    impl_->set_resizable(resizable);
+  }
+
+  // ------------------------------------------------------------------
+  // Handle management
+  // ------------------------------------------------------------------
+
+  /// True if this handle points to a valid StorageImpl.
+  bool valid() const noexcept { return static_cast<bool>(impl_); }
+
+  /// Explicit bool conversion — same as valid().
+  explicit operator bool() const noexcept { return valid(); }
+
+  /// Access the underlying intrusive_ptr.
+  const intrusive_ptr<StorageImpl>& storage_impl() const noexcept {
+    return impl_;
+  }
+
+  /// Access the raw StorageImpl pointer.
+  StorageImpl* unsafe_get_storage_impl() const noexcept {
+    return impl_.get();
+  }
+
+  /// Current strong reference count on the StorageImpl.
+  size_t use_count() const noexcept { return impl_.use_count(); }
+
+  /// True if this is the sole owner.
+  bool unique() const noexcept { return impl_.unique(); }
+
+  // ------------------------------------------------------------------
+  // Equality — two Storage handles are equal iff they point to the
+  // same StorageImpl (identity, not value equality).
+  // ------------------------------------------------------------------
+
+  bool operator==(const Storage& rhs) const noexcept {
+    return impl_ == rhs.impl_;
+  }
+  bool operator!=(const Storage& rhs) const noexcept {
+    return impl_ != rhs.impl_;
+  }
+
+ private:
+  intrusive_ptr<StorageImpl> impl_;
+};
+
+}  // namespace c10
+</file>
+
+<file path="c10/core/StorageImpl.cpp">
+// ============================================================================
+// Axion / c10 — StorageImpl implementation
+// ============================================================================
+
+#include "c10/core/StorageImpl.h"
+
+#include <algorithm>
+#include <cassert>
+#include <cstring>
+
+namespace c10 {
+
+// ----------------------------------------------------------------------------
+// Constructors
+// ----------------------------------------------------------------------------
+
+StorageImpl::StorageImpl(size_t nbytes, Allocator* allocator)
+    : data_(allocator ? allocator->allocate(nbytes) : DataPtr()),
+      nbytes_(nbytes),
+      allocator_(allocator),
+      resizable_(true) {}
+
+StorageImpl::StorageImpl(size_t nbytes, DataPtr data, Allocator* allocator)
+    : data_(std::move(data)),
+      nbytes_(nbytes),
+      allocator_(allocator),
+      resizable_(allocator != nullptr) {}
+
+// ----------------------------------------------------------------------------
+// Move semantics
+// ----------------------------------------------------------------------------
+
+StorageImpl::StorageImpl(StorageImpl&& other) noexcept
+    : intrusive_ptr_target(std::move(other)),
+      data_(std::move(other.data_)),
+      nbytes_(other.nbytes_),
+      allocator_(other.allocator_),
+      resizable_(other.resizable_) {
+  other.nbytes_ = 0;
+  other.allocator_ = nullptr;
+  other.resizable_ = false;
+}
+
+StorageImpl& StorageImpl::operator=(StorageImpl&& other) noexcept {
+  if (this != &other) {
+    data_ = std::move(other.data_);
+    nbytes_ = other.nbytes_;
+    allocator_ = other.allocator_;
+    resizable_ = other.resizable_;
+    other.nbytes_ = 0;
+    other.allocator_ = nullptr;
+    other.resizable_ = false;
+  }
+  return *this;
+}
+
+// ----------------------------------------------------------------------------
+// Resize
+// ----------------------------------------------------------------------------
+
+void StorageImpl::resize(size_t new_nbytes) {
+  assert(resizable_ && "Cannot resize non-resizable storage");
+  assert(allocator_ && "Cannot resize storage without an allocator");
+
+  if (new_nbytes == nbytes_) {
+    return;  // no-op
+  }
+
+  // Allocate new buffer.
+  DataPtr new_data = allocator_->allocate(new_nbytes);
+
+  // Copy existing data (up to the smaller of old and new sizes).
+  if (data_.get() && new_data.get()) {
+    size_t copy_bytes = std::min(nbytes_, new_nbytes);
+    std::memcpy(new_data.get(), data_.get(), copy_bytes);
+  }
+
+  // Replace — old DataPtr's destructor frees the old memory.
+  data_ = std::move(new_data);
+  nbytes_ = new_nbytes;
+}
+
+}  // namespace c10
+</file>
+
+<file path="c10/core/StorageImpl.h">
+#pragma once
+
+// ============================================================================
+// Axion / c10 — StorageImpl
+// ============================================================================
+//
+// StorageImpl is the first object in the stack that ties memory to metadata.
+// It wraps a DataPtr (the raw owned memory) and adds:
+//
+//   1. nbytes_     — how many bytes are allocated
+//   2. allocator_  — which allocator produced this memory (non-owning)
+//   3. resizable_  — whether resize operations are allowed
+//
+// StorageImpl knows NOTHING about shapes, strides, dtypes, or dimensions.
+// It just knows: here is a contiguous block of bytes, here is how big it is,
+// here is how to free it, here is where it came from.
+//
+// WHY INTRUSIVE_PTR_TARGET:
+//   Multiple TensorImpls can share the same StorageImpl — that's how views
+//   work (transpose, slice, reshape don't copy data).  intrusive_ptr gives
+//   automatic lifetime management: the memory lives as long as at least one
+//   tensor references it.
+//
+// OWNERSHIP:
+//   StorageImpl exclusively owns its DataPtr (DataPtr is move-only).
+//   StorageImpl itself is managed via intrusive_ptr<StorageImpl>.
+//   The allocator_ pointer is non-owning — allocators are singletons.
+
+#include <cstddef>
+#include <utility>
+
+#include "c10/core/Allocator.h"
+#include "c10/core/DataPtr.h"
+#include "c10/core/Device.h"
+#include "c10/macros/Macros.h"
+#include "c10/util/intrusive_ptr.h"
+
+namespace c10 {
+
+class C10_API StorageImpl : public intrusive_ptr_target {
+ public:
+  // ------------------------------------------------------------------
+  // Constructors
+  // ------------------------------------------------------------------
+
+  /// Allocate-on-construction: asks the given allocator for `nbytes`
+  /// of memory.  This is the normal construction path.
+  ///
+  ///   auto storage = c10::make_intrusive<StorageImpl>(
+  ///       1024, GetAllocator(DeviceType::CPU));
+  ///
+  StorageImpl(size_t nbytes, Allocator* allocator);
+
+  /// Wrap externally-provided memory: takes ownership of an existing
+  /// DataPtr.  The allocator may be null if the memory was not produced
+  /// by our allocator system (e.g., memory-mapped files, foreign buffers).
+  ///
+  ///   DataPtr dp(external_ptr, custom_deleter, Device::cpu());
+  ///   auto storage = c10::make_intrusive<StorageImpl>(
+  ///       size, std::move(dp), /*allocator=*/nullptr);
+  ///
+  StorageImpl(size_t nbytes, DataPtr data, Allocator* allocator);
+
+  // StorageImpl is not copyable — DataPtr is move-only.
+  C10_DISABLE_COPY(StorageImpl);
+
+  // Movable — ownership of the DataPtr transfers.
+  StorageImpl(StorageImpl&& other) noexcept;
+  StorageImpl& operator=(StorageImpl&& other) noexcept;
+
+  ~StorageImpl() override = default;
+
+  // ------------------------------------------------------------------
+  // Accessors
+  // ------------------------------------------------------------------
+
+  /// Raw pointer to the start of the buffer.
+  void* data() const noexcept { return data_.get(); }
+
+  /// Number of bytes allocated.
+  size_t nbytes() const noexcept { return nbytes_; }
+
+  /// Where this memory lives (CPU, CUDA, etc.).
+  Device device() const noexcept { return data_.device(); }
+
+  /// The allocator that produced this memory (may be null for external).
+  Allocator* allocator() const noexcept { return allocator_; }
+
+  /// Whether this storage can be resized.
+  bool resizable() const noexcept { return resizable_; }
+
+  /// The underlying DataPtr — const ref for inspection.
+  const DataPtr& data_ptr() const noexcept { return data_; }
+
+  // ------------------------------------------------------------------
+  // Modifiers
+  // ------------------------------------------------------------------
+
+  /// Allow or disallow resizing.
+  void set_resizable(bool resizable) noexcept { resizable_ = resizable; }
+
+  /// Resize the storage to `new_nbytes`.
+  ///
+  /// - If not resizable, asserts / aborts.
+  /// - If new_nbytes == nbytes_, no-op.
+  /// - Otherwise allocates new memory via allocator_, copies the
+  ///   min(old, new) bytes, and replaces the DataPtr.
+  void resize(size_t new_nbytes);
+
+ private:
+  DataPtr data_;
+  size_t nbytes_;
+  Allocator* allocator_;  // non-owning — allocators are singletons
+  bool resizable_;
+};
+
+}  // namespace c10
+</file>
+
+<file path="c10/core/Tensor.h">
+#pragma once
+
+// ============================================================================
+// Axion / c10 — Tensor
+// ============================================================================
+//
+// The user-facing handle to a tensor.
+//
+// Tensor wraps intrusive_ptr<TensorImpl> exactly the way Storage wraps
+// intrusive_ptr<StorageImpl>.  It adds no fields of its own — it is a
+// thin, zero-overhead handle whose only job is to:
+//
+//   1. Own a strong reference to the underlying TensorImpl.
+//   2. Forward every accessor/mutator through to that TensorImpl.
+//   3. Provide convenient factories so users never touch TensorImpl directly.
+//
+// Copying a Tensor is cheap — it increments the refcount and both handles
+// now point at the same TensorImpl (same metadata, same Storage, same
+// memory).  This is how views, slicing, and aliasing work: the Tensor
+// handle is lightweight, the TensorImpl carries the real state.
+//
+// Move is even cheaper — just pointer pilfering, no atomic ops.
+//
+// RELATIONSHIP TO PYTORCH:
+//   PyTorch's at::Tensor is the moral equivalent.  In their stack:
+//     Tensor → TensorImpl → StorageImpl → DataPtr
+//   We mirror this exactly.
+
+#include <cassert>
+#include <cstdint>
+#include <initializer_list>
+#include <utility>
+#include <vector>
+
+#include "c10/core/AllocatorRegistry.h"
+#include "c10/core/CPUAllocator.h"
+#include "c10/core/ScalarType.h"
+#include "c10/core/Storage.h"
+#include "c10/core/TensorImpl.h"
+#include "c10/macros/Macros.h"
+#include "c10/util/intrusive_ptr.h"
+
+namespace c10 {
+
+class C10_API Tensor {
+ public:
+  // ------------------------------------------------------------------
+  // Constructors
+  // ------------------------------------------------------------------
+
+  /// Default — undefined tensor.  No TensorImpl, no memory.
+  Tensor() = default;
+
+  /// Wrap an existing intrusive_ptr<TensorImpl>.
+  explicit Tensor(intrusive_ptr<TensorImpl> impl) noexcept
+      : impl_(std::move(impl)) {}
+
+  /// Wrap a raw TensorImpl pointer (takes a new strong reference).
+  explicit Tensor(TensorImpl* impl) noexcept : impl_(impl) {}
+
+  // ------------------------------------------------------------------
+  // Factories
+  // ------------------------------------------------------------------
+
+  /// Allocate an uninitialized tensor with the given shape and dtype on CPU.
+  ///
+  ///   auto t = Tensor::empty({3, 4}, ScalarType::Float32);
+  ///
+  static Tensor empty(
+      std::vector<int64_t> sizes,
+      ScalarType dtype = ScalarType::Float32,
+      Allocator* allocator = nullptr) {
+    if (!allocator) {
+      allocator = GetAllocator(DeviceType::CPU);
+    }
+    // Fallback: if the registry hasn't been populated (static archive
+    // linker stripping), use the direct singleton accessor.
+    if (!allocator) {
+      allocator = GetCPUAllocator();
+    }
+    // Compute total bytes: product(sizes) * elementSize(dtype).
+    int64_t numel = 1;
+    for (auto s : sizes) {
+      numel *= s;
+    }
+    size_t nbytes = static_cast<size_t>(numel) * elementSize(dtype);
+    auto storage = Storage::create(nbytes, allocator);
+    return Tensor(
+        make_intrusive<TensorImpl>(std::move(storage), dtype, std::move(sizes)));
+  }
+
+  /// Wrap externally-owned memory as a tensor (non-owning — uses
+  /// deleteNothing so the caller retains ownership of the buffer).
+  ///
+  ///   float buf[12];
+  ///   auto t = Tensor::from_blob(buf, {3, 4}, ScalarType::Float32);
+  ///
+  static Tensor from_blob(
+      void* data,
+      std::vector<int64_t> sizes,
+      ScalarType dtype = ScalarType::Float32) {
+    int64_t numel = 1;
+    for (auto s : sizes) {
+      numel *= s;
+    }
+    size_t nbytes = static_cast<size_t>(numel) * elementSize(dtype);
+    // deleteNothing — caller owns the memory, we just observe it.
+    auto storage =
+        Storage::wrap(nbytes, DataPtr(data, deleteNothing, Device::cpu()));
+    return Tensor(
+        make_intrusive<TensorImpl>(std::move(storage), dtype, std::move(sizes)));
+  }
+
+  // ------------------------------------------------------------------
+  // Forwarding accessors — all delegate to TensorImpl
+  // ------------------------------------------------------------------
+
+  /// Shape — number of elements along each dimension.
+  const std::vector<int64_t>& sizes() const noexcept {
+    return impl_->sizes();
+  }
+
+  /// Strides — element-skip per dimension.
+  const std::vector<int64_t>& strides() const noexcept {
+    return impl_->strides();
+  }
+
+  /// Element type.
+  ScalarType dtype() const noexcept { return impl_->dtype(); }
+
+  /// Total number of elements.
+  int64_t numel() const noexcept { return impl_->numel(); }
+
+  /// Number of dimensions.
+  int64_t ndim() const noexcept { return impl_->ndim(); }
+
+  /// Element offset from the start of storage.
+  int64_t storage_offset() const noexcept { return impl_->storage_offset(); }
+
+  /// Device the data lives on.
+  Device device() const noexcept { return impl_->device(); }
+
+  /// True if the tensor is contiguous in memory (row-major, no gaps).
+  bool is_contiguous() const noexcept { return impl_->is_contiguous(); }
+
+  /// Size along a specific dimension.
+  int64_t size(int64_t dim) const noexcept {
+    assert(dim >= 0 && dim < ndim() && "dimension out of range");
+    return impl_->sizes()[static_cast<size_t>(dim)];
+  }
+
+  /// Stride along a specific dimension.
+  int64_t stride(int64_t dim) const noexcept {
+    assert(dim >= 0 && dim < ndim() && "dimension out of range");
+    return impl_->strides()[static_cast<size_t>(dim)];
+  }
+
+  // ------------------------------------------------------------------
+  // Data access
+  // ------------------------------------------------------------------
+
+  /// Untyped raw pointer, adjusted for storage_offset.
+  void* data_ptr() const noexcept { return impl_->data_ptr(); }
+
+  /// Typed data pointer — casts the raw pointer to T*.
+  ///
+  ///   float* p = t.data_ptr<float>();
+  ///
+  template <typename T>
+  T* data_ptr() const noexcept {
+    return static_cast<T*>(impl_->data_ptr());
+  }
+
+  // ------------------------------------------------------------------
+  // Storage access
+  // ------------------------------------------------------------------
+
+  /// The underlying Storage handle.
+  const Storage& storage() const noexcept { return impl_->storage(); }
+
+  // ------------------------------------------------------------------
+  // Handle management
+  // ------------------------------------------------------------------
+
+  /// True if this handle points to a valid TensorImpl.
+  bool defined() const noexcept { return static_cast<bool>(impl_); }
+
+  /// Explicit bool conversion — same as defined().
+  explicit operator bool() const noexcept { return defined(); }
+
+  /// Access the underlying intrusive_ptr.
+  const intrusive_ptr<TensorImpl>& unsafeGetTensorImpl() const noexcept {
+    return impl_;
+  }
+
+  /// Access the raw TensorImpl pointer.
+  TensorImpl* unsafe_get_tensor_impl() const noexcept {
+    return impl_.get();
+  }
+
+  /// Current strong reference count on the TensorImpl.
+  size_t use_count() const noexcept { return impl_.use_count(); }
+
+  /// True if this is the sole owner.
+  bool unique() const noexcept { return impl_.unique(); }
+
+  // ------------------------------------------------------------------
+  // Equality — identity-based, not value-based.
+  // Two Tensor handles are equal iff they point to the same TensorImpl.
+  // ------------------------------------------------------------------
+
+  bool operator==(const Tensor& rhs) const noexcept {
+    return impl_ == rhs.impl_;
+  }
+  bool operator!=(const Tensor& rhs) const noexcept {
+    return impl_ != rhs.impl_;
+  }
+
+ private:
+  intrusive_ptr<TensorImpl> impl_;
+};
+
+}  // namespace c10
+</file>
+
+<file path="c10/core/TensorImpl.cpp">
+#include "c10/core/TensorImpl.h"
+
+#include <numeric>
+#include <algorithm>
+
+namespace c10 {
+
+TensorImpl::TensorImpl(
+    Storage storage,
+    ScalarType dtype,
+    std::vector<int64_t> sizes,
+    std::vector<int64_t> strides,
+    int64_t storage_offset)
+    : storage_(std::move(storage)),
+      dtype_(dtype),
+      sizes_(std::move(sizes)),
+      strides_(std::move(strides)),
+      storage_offset_(storage_offset) {
+  refresh_numel();
+  refresh_contiguous();
+}
+
+TensorImpl::TensorImpl(
+    Storage storage,
+    ScalarType dtype,
+    std::vector<int64_t> sizes,
+    int64_t storage_offset)
+    : storage_(std::move(storage)),
+      dtype_(dtype),
+      sizes_(std::move(sizes)),
+      strides_(default_strides(sizes_)),
+      storage_offset_(storage_offset) {
+  refresh_numel();
+  refresh_contiguous();
+}
+
+void TensorImpl::refresh_numel() noexcept {
+  if (sizes_.empty()) {
+    numel_ = 1;
+  } else {
+    numel_ = 1;
+    for (auto s : sizes_) {
+      numel_ *= s;
+    }
+  }
+}
+
+void TensorImpl::refresh_contiguous() noexcept {
+  if (sizes_.empty()) {
+    is_contiguous_ = true;
+    return;
+  }
+
+  int64_t expected_stride = 1;
+  for (int64_t i = static_cast<int64_t>(sizes_.size()) - 1; i >= 0; --i) {
+    if (strides_[i] != expected_stride) {
+      is_contiguous_ = false;
+      return;
+    }
+    expected_stride *= sizes_[i];
+  }
+  is_contiguous_ = true;
+}
+
+std::vector<int64_t> TensorImpl::default_strides(const std::vector<int64_t>& sizes) {
+  int64_t d = static_cast<int64_t>(sizes.size());
+  std::vector<int64_t> strides(d);
+  if (d == 0) {
+    return strides;
+  }
+  strides[d - 1] = 1;
+  for (int64_t i = d - 2; i >= 0; --i) {
+    strides[i] = strides[i + 1] * sizes[i + 1];
+  }
+  return strides;
+}
+
+} // namespace c10
+</file>
+
+<file path="c10/core/TensorImpl.h">
+#pragma once
+
+#include <vector>
+#include <numeric>
+#include <cstdint>
+
+#include "c10/core/Storage.h"
+#include "c10/core/ScalarType.h"
+#include "c10/util/intrusive_ptr.h"
+#include "c10/macros/Macros.h"
+
+namespace c10 {
+
+/**
+ * TensorImpl is the core object that represents a Tensor.
+ * It ties together Storage (raw memory) with metadata (shape, strides, dtype).
+ */
+class C10_API TensorImpl : public intrusive_ptr_target {
+ public:
+  /**
+   * Construct a TensorImpl with explicit storage, sizes, strides, and offset.
+   */
+  TensorImpl(
+      Storage storage,
+      ScalarType dtype,
+      std::vector<int64_t> sizes,
+      std::vector<int64_t> strides,
+      int64_t storage_offset = 0);
+
+  /**
+   * Construct a TensorImpl with explicit storage, sizes, and offset.
+   * Strides are automatically computed for a contiguous layout.
+   */
+  TensorImpl(
+      Storage storage,
+      ScalarType dtype,
+      std::vector<int64_t> sizes,
+      int64_t storage_offset = 0);
+
+  C10_DISABLE_COPY(TensorImpl);
+
+  virtual ~TensorImpl() = default;
+
+  // ------------------------------------------------------------------
+  // Accessors
+  // ------------------------------------------------------------------
+
+  const std::vector<int64_t>& sizes() const noexcept { return sizes_; }
+  const std::vector<int64_t>& strides() const noexcept { return strides_; }
+  ScalarType dtype() const noexcept { return dtype_; }
+  int64_t storage_offset() const noexcept { return storage_offset_; }
+  int64_t numel() const noexcept { return numel_; }
+  int64_t ndim() const noexcept { return static_cast<int64_t>(sizes_.size()); }
+
+  const Storage& storage() const noexcept { return storage_; }
+  Device device() const noexcept { return storage_.device(); }
+
+  /**
+   * Returns the raw pointer to the data, adjusted for storage_offset.
+   */
+  void* data() const noexcept {
+    if (!storage_) return nullptr;
+    return static_cast<char*>(storage_.data()) + (storage_offset_ * elementSize(dtype_));
+  }
+
+  /**
+   * Returns the raw pointer to the data, adjusted for storage_offset.
+   * Alias for data() to match PyTorch naming.
+   */
+  void* data_ptr() const noexcept {
+    return data();
+  }
+
+  /**
+   * Checks if the tensor is contiguous in memory.
+   * Caches the result in is_contiguous_ for O(1) access.
+   */
+  bool is_contiguous() const noexcept { return is_contiguous_; }
+
+  /**
+   * Placeholder for future Autograd support.
+   */
+  void* autograd_meta() const noexcept { return autograd_meta_; }
+  void set_autograd_meta(void* meta) noexcept { autograd_meta_ = meta; }
+
+ private:
+  void refresh_numel() noexcept;
+  void refresh_contiguous() noexcept;
+  static std::vector<int64_t> default_strides(const std::vector<int64_t>& sizes);
+
+  Storage storage_;
+  ScalarType dtype_;
+  std::vector<int64_t> sizes_;
+  std::vector<int64_t> strides_;
+  int64_t storage_offset_;
+  int64_t numel_;
+  bool is_contiguous_;
+
+  // Future Autograd support. Zero overhead on inference.
+  void* autograd_meta_ = nullptr;
+};
+
+} // namespace c10
+</file>
+
+<file path="c10/CMakeLists.txt">
+# ============================================================================
+# c10 — Core runtime library
+# ============================================================================
+#
+# This is a header-only library for now.  As we add .cpp translation units
+# (e.g., Allocator.cpp, DeviceGuard.cpp) it will become a STATIC library.
+
+# Collect sources — currently empty; will grow as we add .cpp files.
+file(GLOB_RECURSE C10_SRCS
+  "${CMAKE_CURRENT_SOURCE_DIR}/core/*.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/util/*.cpp"
+)
+
+# If no .cpp files exist yet, create an INTERFACE (header-only) target.
+# Once we have real sources, switch to a STATIC library.
+if(C10_SRCS)
+  add_library(c10 STATIC ${C10_SRCS})
+  target_include_directories(c10 PUBLIC ${CMAKE_SOURCE_DIR})
+  target_compile_features(c10 PUBLIC cxx_std_17)
+else()
+  add_library(c10 INTERFACE)
+  target_include_directories(c10 INTERFACE ${CMAKE_SOURCE_DIR})
+  target_compile_features(c10 INTERFACE cxx_std_17)
+endif()
+</file>
+
+<file path="examples/CMakeLists.txt">
+# ============================================================================
+# examples — (placeholder, add executables here as they are written)
+# ============================================================================
+</file>
+
+<file path="test/c10/allocator_test.cpp">
+// ============================================================================
+// Tests for c10::Allocator and c10::AllocatorRegistry
+// ============================================================================
+//
+// 15 test cases covering:
+//   - Interface implementability
+//   - allocate() correctness (non-null, device, zero-size)
+//   - raw_deleter() returns correct function pointer
+//   - raw_allocate() / raw_deallocate() convenience
+//   - Registry: register, retrieve, nullptr for unregistered, overwrite
+//   - Non-copyability via type traits
+//   - Multiple independent allocations
+
+#include <gtest/gtest.h>
+
+#include <cstdlib>
+#include <cstring>
+#include <type_traits>
+
+#include "c10/core/Allocator.h"
+#include "c10/core/AllocatorRegistry.h"
+
+namespace {
+
+using namespace c10;
+
+// ---------------------------------------------------------------------------
+// Mock allocator — concrete implementation for testing only
+// ---------------------------------------------------------------------------
+
+class MockCPUAllocator : public Allocator {
+ public:
+  DataPtr allocate(size_t nbytes) const override {
+    void* ptr = nbytes > 0 ? std::malloc(nbytes) : nullptr;
+    return DataPtr(ptr, deleteCPU, Device::cpu());
+  }
+
+  Deleter raw_deleter() const override { return deleteCPU; }
+};
+
+// A second mock to test registry overwriting.
+class MockCPUAllocator2 : public Allocator {
+ public:
+  DataPtr allocate(size_t nbytes) const override {
+    void* ptr = nbytes > 0 ? std::malloc(nbytes) : nullptr;
+    return DataPtr(ptr, deleteCPU, Device::cpu());
+  }
+
+  Deleter raw_deleter() const override { return deleteCPU; }
+};
+
+// ============================================================================
+// 1. Interface is implementable — compiles and links
+// ============================================================================
+TEST(Allocator, InterfaceIsImplementable) {
+  MockCPUAllocator alloc;
+  // If this compiles, the interface is correctly implementable.
+  Allocator* base = &alloc;
+  EXPECT_NE(base, nullptr);
+}
+
+// ============================================================================
+// 2. allocate(64) returns non-null DataPtr
+// ============================================================================
+TEST(Allocator, AllocateReturnsNonNull) {
+  MockCPUAllocator alloc;
+  auto dp = alloc.allocate(64);
+  EXPECT_NE(dp.get(), nullptr);
+  // dp destructor frees — ASan validates.
+}
+
+// ============================================================================
+// 3. allocate(64) returns CPU device DataPtr
+// ============================================================================
+TEST(Allocator, AllocateReturnsCPUDevice) {
+  MockCPUAllocator alloc;
+  auto dp = alloc.allocate(64);
+  EXPECT_TRUE(dp.device().is_cpu());
+  EXPECT_EQ(dp.device().index, 0);
+}
+
+// ============================================================================
+// 4. allocate(0) does not crash — zero size allocation
+// ============================================================================
+TEST(Allocator, AllocateZeroSizeDoesNotCrash) {
+  MockCPUAllocator alloc;
+  auto dp = alloc.allocate(0);
+  // data_ may be null for zero-size, that's fine.
+  // Just must not crash.
+  EXPECT_TRUE(dp.device().is_cpu());
+}
+
+// ============================================================================
+// 5. raw_deleter() returns correct function pointer
+// ============================================================================
+TEST(Allocator, RawDeleterReturnsCorrectPointer) {
+  MockCPUAllocator alloc;
+  EXPECT_EQ(alloc.raw_deleter(), deleteCPU);
+}
+
+// ============================================================================
+// 6. raw_allocate() returns non-null raw pointer
+// ============================================================================
+TEST(Allocator, RawAllocateReturnsNonNull) {
+  MockCPUAllocator alloc;
+  void* ptr = alloc.raw_allocate(128);
+  ASSERT_NE(ptr, nullptr);
+  // Caller took ownership — must free manually.
+  alloc.raw_deallocate(ptr);
+}
+
+// ============================================================================
+// 7. raw_deallocate() frees without crash — ASan validates
+// ============================================================================
+TEST(Allocator, RawDeallocateFreesCleanly) {
+  MockCPUAllocator alloc;
+  void* ptr = std::malloc(32);
+  ASSERT_NE(ptr, nullptr);
+  std::memset(ptr, 0xCD, 32);
+  // raw_deallocate should call free() — ASan validates no leak/double-free.
+  alloc.raw_deallocate(ptr);
+}
+
+// ============================================================================
+// 8. RegisterAllocator stores allocator correctly
+// ============================================================================
+TEST(AllocatorRegistry, RegisterStoresCorrectly) {
+  MockCPUAllocator alloc;
+  RegisterAllocator(DeviceType::CPU, &alloc);
+  EXPECT_EQ(GetAllocator(DeviceType::CPU), &alloc);
+}
+
+// ============================================================================
+// 9. GetAllocator(DeviceType::CPU) returns registered allocator
+// ============================================================================
+TEST(AllocatorRegistry, GetAllocatorReturnsRegistered) {
+  MockCPUAllocator alloc;
+  RegisterAllocator(DeviceType::CPU, &alloc);
+  Allocator* retrieved = GetAllocator(DeviceType::CPU);
+  ASSERT_NE(retrieved, nullptr);
+
+  // Verify it's actually usable — allocate through the retrieved pointer.
+  auto dp = retrieved->allocate(16);
+  EXPECT_NE(dp.get(), nullptr);
+  EXPECT_TRUE(dp.device().is_cpu());
+}
+
+// ============================================================================
+// 10. GetAllocator for unregistered device returns nullptr
+// ============================================================================
+TEST(AllocatorRegistry, UnregisteredDeviceReturnsNull) {
+  // CUDA is not registered in our test setup (unless a previous test did).
+  // Use a high device type index that definitely isn't registered.
+  // We'll test by registering CPU then checking CUDA is still whatever
+  // it was (likely nullptr from the zero-initialized array or a prior test).
+  // Better: check the return for an invalid DeviceType.
+  Allocator* result = GetAllocator(static_cast<DeviceType>(7));
+  EXPECT_EQ(result, nullptr);
+}
+
+// ============================================================================
+// 11. GetAllocator(Device) convenience overload works
+// ============================================================================
+TEST(AllocatorRegistry, GetAllocatorDeviceOverload) {
+  MockCPUAllocator alloc;
+  RegisterAllocator(DeviceType::CPU, &alloc);
+
+  Allocator* retrieved = GetAllocator(Device::cpu());
+  EXPECT_EQ(retrieved, &alloc);
+}
+
+// ============================================================================
+// 12. Second registration overwrites first
+// ============================================================================
+TEST(AllocatorRegistry, SecondRegistrationOverwrites) {
+  MockCPUAllocator alloc1;
+  MockCPUAllocator2 alloc2;
+
+  RegisterAllocator(DeviceType::CPU, &alloc1);
+  EXPECT_EQ(GetAllocator(DeviceType::CPU), &alloc1);
+
+  RegisterAllocator(DeviceType::CPU, &alloc2);
+  EXPECT_EQ(GetAllocator(DeviceType::CPU), &alloc2);
+  EXPECT_NE(GetAllocator(DeviceType::CPU), &alloc1);
+}
+
+// ============================================================================
+// 13. DataPtr returned by allocate() frees correctly on destruction
+// ============================================================================
+TEST(Allocator, AllocateFreesOnDestruction) {
+  MockCPUAllocator alloc;
+  {
+    auto dp = alloc.allocate(256);
+    EXPECT_NE(dp.get(), nullptr);
+    // Write to it — ASan validates the memory is real.
+    std::memset(dp.get(), 0xAB, 256);
+  }  // dp destructor fires — ASan validates no leak.
+}
+
+// ============================================================================
+// 14. Multiple allocations return independent DataPtrs
+// ============================================================================
+TEST(Allocator, MultipleAllocationsAreIndependent) {
+  MockCPUAllocator alloc;
+  auto dp1 = alloc.allocate(32);
+  auto dp2 = alloc.allocate(32);
+  auto dp3 = alloc.allocate(32);
+
+  // All non-null and distinct.
+  EXPECT_NE(dp1.get(), nullptr);
+  EXPECT_NE(dp2.get(), nullptr);
+  EXPECT_NE(dp3.get(), nullptr);
+  EXPECT_NE(dp1.get(), dp2.get());
+  EXPECT_NE(dp1.get(), dp3.get());
+  EXPECT_NE(dp2.get(), dp3.get());
+  // Each has its own deleter — all three freed independently by destructors.
+}
+
+// ============================================================================
+// 15. Allocator is not copyable — verified via type traits
+// ============================================================================
+TEST(Allocator, NotCopyable) {
+  EXPECT_FALSE(std::is_copy_constructible<MockCPUAllocator>::value);
+  EXPECT_FALSE(std::is_copy_assignable<MockCPUAllocator>::value);
+  EXPECT_FALSE(std::is_move_constructible<MockCPUAllocator>::value);
+  EXPECT_FALSE(std::is_move_assignable<MockCPUAllocator>::value);
+}
+
+}  // namespace
+</file>
+
+<file path="test/c10/cpu_allocator_test.cpp">
+// ============================================================================
+// Tests for c10::CPUAllocator
+// ============================================================================
+//
+// Tests covering:
+//   - allocate() returns non-null, correct device, correct alignment
+//   - Zero-size allocation is safe
+//   - Memory is writable and zero-initialized
+//   - raw_deleter() returns deleteCPU
+//   - Self-registration into AllocatorRegistry
+//   - GetAllocator(DeviceType::CPU) returns the CPUAllocator
+//   - GetCPUAllocator() returns a valid singleton
+//   - raw_allocate/raw_deallocate work correctly
+//   - Multiple allocations are independent and correctly aligned
+//   - Large allocation works
+//   - DataPtr from allocate() frees correctly on destruction (ASan)
+
+#include <gtest/gtest.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+
+#include "c10/core/AllocatorRegistry.h"
+#include "c10/core/CPUAllocator.h"
+
+namespace {
+
+using namespace c10;
+
+// ============================================================================
+// 1. allocate(64) returns non-null DataPtr
+// ============================================================================
+TEST(CPUAllocator, AllocateReturnsNonNull) {
+  auto* alloc = GetCPUAllocator();
+  auto dp = alloc->allocate(64);
+  EXPECT_NE(dp.get(), nullptr);
+}
+
+// ============================================================================
+// 2. allocate returns CPU device
+// ============================================================================
+TEST(CPUAllocator, AllocateReturnsCPUDevice) {
+  auto* alloc = GetCPUAllocator();
+  auto dp = alloc->allocate(128);
+  EXPECT_TRUE(dp.device().is_cpu());
+  EXPECT_EQ(dp.device().index, 0);
+}
+
+// ============================================================================
+// 3. allocate returns 64-byte-aligned pointer
+// ============================================================================
+TEST(CPUAllocator, AllocateIsAligned) {
+  auto* alloc = GetCPUAllocator();
+  auto dp = alloc->allocate(100);
+  auto addr = reinterpret_cast<uintptr_t>(dp.get());
+  EXPECT_EQ(addr % kCPUAlignment, 0u)
+      << "Pointer " << dp.get() << " is not 64-byte aligned";
+}
+
+// ============================================================================
+// 4. Zero-size allocation does not crash
+// ============================================================================
+TEST(CPUAllocator, AllocateZeroSize) {
+  auto* alloc = GetCPUAllocator();
+  auto dp = alloc->allocate(0);
+  // data_ may be null for zero-size — that's correct.
+  EXPECT_EQ(dp.get(), nullptr);
+  EXPECT_TRUE(dp.device().is_cpu());
+}
+
+// ============================================================================
+// 5. Memory is writable
+// ============================================================================
+TEST(CPUAllocator, MemoryIsWritable) {
+  auto* alloc = GetCPUAllocator();
+  auto dp = alloc->allocate(256);
+  ASSERT_NE(dp.get(), nullptr);
+  // Write a pattern — ASan validates the memory is real.
+  std::memset(dp.get(), 0xCD, 256);
+  auto* bytes = static_cast<unsigned char*>(dp.get());
+  EXPECT_EQ(bytes[0], 0xCD);
+  EXPECT_EQ(bytes[255], 0xCD);
+}
+
+// ============================================================================
+// 6. Memory is zero-initialized
+// ============================================================================
+TEST(CPUAllocator, MemoryIsZeroInitialized) {
+  auto* alloc = GetCPUAllocator();
+  auto dp = alloc->allocate(128);
+  ASSERT_NE(dp.get(), nullptr);
+  auto* bytes = static_cast<unsigned char*>(dp.get());
+  for (size_t i = 0; i < 128; ++i) {
+    EXPECT_EQ(bytes[i], 0) << "Byte " << i << " is not zero";
+  }
+}
+
+// ============================================================================
+// 7. raw_deleter() returns deleteCPU
+// ============================================================================
+TEST(CPUAllocator, RawDeleterIsDeleteCPU) {
+  auto* alloc = GetCPUAllocator();
+  EXPECT_EQ(alloc->raw_deleter(), deleteCPU);
+}
+
+// ============================================================================
+// 8. Self-registration — GetAllocator(DeviceType::CPU) works
+// ============================================================================
+TEST(CPUAllocator, SelfRegistration) {
+  Allocator* alloc = GetAllocator(DeviceType::CPU);
+  ASSERT_NE(alloc, nullptr);
+  // Verify it's the same object as GetCPUAllocator().
+  EXPECT_EQ(alloc, GetCPUAllocator());
+}
+
+// ============================================================================
+// 9. GetAllocator(Device::cpu()) convenience overload
+// ============================================================================
+TEST(CPUAllocator, GetAllocatorDeviceOverload) {
+  Allocator* alloc = GetAllocator(Device::cpu());
+  ASSERT_NE(alloc, nullptr);
+  EXPECT_EQ(alloc, GetCPUAllocator());
+}
+
+// ============================================================================
+// 10. Allocate through the registry — end-to-end
+// ============================================================================
+TEST(CPUAllocator, AllocateThroughRegistry) {
+  Allocator* alloc = GetAllocator(DeviceType::CPU);
+  ASSERT_NE(alloc, nullptr);
+  auto dp = alloc->allocate(64);
+  EXPECT_NE(dp.get(), nullptr);
+  EXPECT_TRUE(dp.device().is_cpu());
+}
+
+// ============================================================================
+// 11. GetCPUAllocator returns a stable singleton
+// ============================================================================
+TEST(CPUAllocator, SingletonIsStable) {
+  auto* a = GetCPUAllocator();
+  auto* b = GetCPUAllocator();
+  EXPECT_EQ(a, b);
+}
+
+// ============================================================================
+// 12. raw_allocate / raw_deallocate roundtrip
+// ============================================================================
+TEST(CPUAllocator, RawAllocateDeallocateRoundtrip) {
+  auto* alloc = GetCPUAllocator();
+  void* ptr = alloc->raw_allocate(512);
+  ASSERT_NE(ptr, nullptr);
+  // Write to prove it's real memory.
+  std::memset(ptr, 0xAB, 512);
+  // Free via the allocator's deleter — ASan validates.
+  alloc->raw_deallocate(ptr);
+}
+
+// ============================================================================
+// 13. Multiple allocations are independent
+// ============================================================================
+TEST(CPUAllocator, MultipleAllocationsIndependent) {
+  auto* alloc = GetCPUAllocator();
+  auto dp1 = alloc->allocate(64);
+  auto dp2 = alloc->allocate(64);
+  auto dp3 = alloc->allocate(64);
+
+  EXPECT_NE(dp1.get(), nullptr);
+  EXPECT_NE(dp2.get(), nullptr);
+  EXPECT_NE(dp3.get(), nullptr);
+  EXPECT_NE(dp1.get(), dp2.get());
+  EXPECT_NE(dp1.get(), dp3.get());
+  EXPECT_NE(dp2.get(), dp3.get());
+}
+
+// ============================================================================
+// 14. Multiple allocations are all aligned
+// ============================================================================
+TEST(CPUAllocator, MultipleAllocationsAllAligned) {
+  auto* alloc = GetCPUAllocator();
+  for (int i = 0; i < 10; ++i) {
+    auto dp = alloc->allocate(100 + i * 7);  // varying sizes
+    ASSERT_NE(dp.get(), nullptr);
+    auto addr = reinterpret_cast<uintptr_t>(dp.get());
+    EXPECT_EQ(addr % kCPUAlignment, 0u)
+        << "Allocation " << i << " at " << dp.get()
+        << " is not 64-byte aligned";
+  }
+}
+
+// ============================================================================
+// 15. Large allocation works
+// ============================================================================
+TEST(CPUAllocator, LargeAllocation) {
+  auto* alloc = GetCPUAllocator();
+  constexpr size_t kSize = 64 * 1024 * 1024;  // 64 MiB
+  auto dp = alloc->allocate(kSize);
+  ASSERT_NE(dp.get(), nullptr);
+  EXPECT_TRUE(dp.device().is_cpu());
+  // Touch first and last byte — ASan validates.
+  auto* bytes = static_cast<unsigned char*>(dp.get());
+  bytes[0] = 0xFF;
+  bytes[kSize - 1] = 0xFE;
+  EXPECT_EQ(bytes[0], 0xFF);
+  EXPECT_EQ(bytes[kSize - 1], 0xFE);
+}
+
+// ============================================================================
+// 16. DataPtr from allocate frees correctly on destruction — ASan validates
+// ============================================================================
+TEST(CPUAllocator, DataPtrFreesOnDestruction) {
+  auto* alloc = GetCPUAllocator();
+  {
+    auto dp = alloc->allocate(1024);
+    EXPECT_NE(dp.get(), nullptr);
+    std::memset(dp.get(), 0xAB, 1024);
+  }  // dp destructor fires — ASan catches any leak.
+}
+
+}  // namespace
+</file>
+
+<file path="test/c10/dataptr_test.cpp">
+// ============================================================================
+// Tests for c10::DataPtr
+// ============================================================================
+//
+// 20 test cases covering:
+//   - Null construction
+//   - CPU construction with malloc
+//   - Destructor behavior / deleter firing
+//   - Deleter fires exactly once
+//   - Move semantics (constructor and assignment)
+//   - Stateful deleter receiving ctx_ not data_
+//   - release_context() preventing destructor from firing
+//   - clear() freeing immediately
+//   - Double clear safety
+//   - Device stored and retrieved correctly
+
+#include <gtest/gtest.h>
+
+#include <cstdlib>
+#include <cstring>
+
+#include "c10/core/DataPtr.h"
+
+namespace {
+
+using namespace c10;
+
+// ---------------------------------------------------------------------------
+// Helpers — tracking deleters
+// ---------------------------------------------------------------------------
+
+// Tracks whether the deleter was called, how many times, and with what pointer.
+struct DeleterTracker {
+  int call_count = 0;
+  void* last_ctx = nullptr;
+};
+
+void trackingDeleter(void* ctx) {
+  // ctx points to a DeleterTracker.
+  auto* tracker = static_cast<DeleterTracker*>(ctx);
+  tracker->call_count++;
+  tracker->last_ctx = ctx;
+}
+
+// A deleter that records the pointer it was called with into an external slot.
+static void* g_received_ctx = nullptr;
+static int g_deleter_calls = 0;
+
+void spyDeleter(void* ctx) {
+  g_received_ctx = ctx;
+  g_deleter_calls++;
+}
+
+void resetSpy() {
+  g_received_ctx = nullptr;
+  g_deleter_calls = 0;
+}
+
+// ============================================================================
+// 1. Default constructor is null
+// ============================================================================
+TEST(DataPtr, DefaultConstructorIsNull) {
+  DataPtr dp;
+  EXPECT_EQ(dp.get(), nullptr);
+  EXPECT_EQ(dp.get_context(), nullptr);
+  EXPECT_EQ(dp.get_deleter(), nullptr);
+  EXPECT_FALSE(static_cast<bool>(dp));
+}
+
+// ============================================================================
+// 2. Default constructor device is CPU
+// ============================================================================
+TEST(DataPtr, DefaultConstructorDeviceIsCPU) {
+  DataPtr dp;
+  EXPECT_TRUE(dp.device().is_cpu());
+  EXPECT_EQ(dp.device().index, 0);
+}
+
+// ============================================================================
+// 3. CPU construction with malloc
+// ============================================================================
+TEST(DataPtr, CPUConstruction) {
+  void* raw = std::malloc(64);
+  ASSERT_NE(raw, nullptr);
+  std::memset(raw, 0xAB, 64);
+
+  DataPtr dp(raw, deleteCPU, Device::cpu());
+  EXPECT_EQ(dp.get(), raw);
+  EXPECT_EQ(dp.get_context(), raw);  // convenience ctor: ctx == data
+  EXPECT_EQ(dp.get_deleter(), deleteCPU);
+  EXPECT_TRUE(static_cast<bool>(dp));
+  // dp's destructor will call free(raw) — ASan verifies no leak.
+}
+
+// ============================================================================
+// 4. Full constructor — data and ctx are separate
+// ============================================================================
+TEST(DataPtr, FullConstructorSeparateDataAndCtx) {
+  void* block = std::malloc(256);
+  ASSERT_NE(block, nullptr);
+  void* user = static_cast<char*>(block) + 64;  // user sees offset
+
+  DataPtr dp(user, block, deleteCPU, Device::cpu());
+  EXPECT_EQ(dp.get(), user);
+  EXPECT_EQ(dp.get_context(), block);
+  EXPECT_NE(dp.get(), dp.get_context());
+  // Destructor will call free(block), not free(user). ASan validates.
+}
+
+// ============================================================================
+// 5. Destructor fires deleter
+// ============================================================================
+TEST(DataPtr, DestructorFiresDeleter) {
+  DeleterTracker tracker;
+  {
+    DataPtr dp(&tracker, &tracker, trackingDeleter, Device::cpu());
+    EXPECT_EQ(tracker.call_count, 0);
+  }  // dp goes out of scope
+  EXPECT_EQ(tracker.call_count, 1);
+}
+
+// ============================================================================
+// 6. Destructor does NOT fire when both ctx and del are null
+// ============================================================================
+TEST(DataPtr, DestructorSkipsWhenNull) {
+  resetSpy();
+  {
+    DataPtr dp;  // null
+  }
+  EXPECT_EQ(g_deleter_calls, 0);
+}
+
+// ============================================================================
+// 7. Deleter fires exactly once
+// ============================================================================
+TEST(DataPtr, DeleterFiresExactlyOnce) {
+  DeleterTracker tracker;
+  {
+    DataPtr dp(&tracker, &tracker, trackingDeleter, Device::cpu());
+  }
+  EXPECT_EQ(tracker.call_count, 1);
+}
+
+// ============================================================================
+// 8. deleteNothing does not free
+// ============================================================================
+TEST(DataPtr, DeleteNothingDoesNotFree) {
+  int stack_var = 42;
+  {
+    DataPtr dp(&stack_var, deleteNothing, Device::cpu());
+    EXPECT_EQ(dp.get(), &stack_var);
+  }
+  // If deleteNothing tried to free a stack variable, ASan would scream.
+  EXPECT_EQ(stack_var, 42);
+}
+
+// ============================================================================
+// 9. Move constructor transfers ownership
+// ============================================================================
+TEST(DataPtr, MoveConstructorTransfersOwnership) {
+  void* raw = std::malloc(32);
+  ASSERT_NE(raw, nullptr);
+
+  DataPtr src(raw, deleteCPU, Device::cpu());
+  DataPtr dst(std::move(src));
+
+  EXPECT_EQ(dst.get(), raw);
+  EXPECT_EQ(dst.get_context(), raw);
+  EXPECT_EQ(dst.get_deleter(), deleteCPU);
+  // src should be null after move.
+  EXPECT_EQ(src.get(), nullptr);          // NOLINT: intentional use-after-move
+  EXPECT_EQ(src.get_context(), nullptr);  // NOLINT
+  EXPECT_EQ(src.get_deleter(), nullptr);  // NOLINT
+  // dst's destructor will free. ASan validates exactly one free.
+}
+
+// ============================================================================
+// 10. Move constructor — source becomes null
+// ============================================================================
+TEST(DataPtr, MoveConstructorNullsSource) {
+  DeleterTracker tracker;
+  DataPtr src(&tracker, &tracker, trackingDeleter, Device::cpu());
+  DataPtr dst(std::move(src));
+
+  EXPECT_FALSE(static_cast<bool>(src));   // NOLINT
+  EXPECT_TRUE(static_cast<bool>(dst));
+  EXPECT_EQ(tracker.call_count, 0);  // not freed yet
+}
+
+// ============================================================================
+// 11. Move assignment transfers ownership
+// ============================================================================
+TEST(DataPtr, MoveAssignmentTransfersOwnership) {
+  void* raw = std::malloc(16);
+  ASSERT_NE(raw, nullptr);
+
+  DataPtr src(raw, deleteCPU, Device::cpu());
+  DataPtr dst;
+
+  dst = std::move(src);
+  EXPECT_EQ(dst.get(), raw);
+  EXPECT_EQ(src.get(), nullptr);  // NOLINT
+}
+
+// ============================================================================
+// 12. Move assignment frees previous target
+// ============================================================================
+TEST(DataPtr, MoveAssignmentFreesPrevious) {
+  DeleterTracker tracker1;
+  DeleterTracker tracker2;
+
+  DataPtr dp1(&tracker1, &tracker1, trackingDeleter, Device::cpu());
+  DataPtr dp2(&tracker2, &tracker2, trackingDeleter, Device::cpu());
+
+  // Assigning dp2 into dp1 should free dp1's old allocation first.
+  dp1 = std::move(dp2);
+  EXPECT_EQ(tracker1.call_count, 1);  // old target freed
+  EXPECT_EQ(tracker2.call_count, 0);  // new target still alive
+}
+
+// ============================================================================
+// 13. Stateful deleter receives ctx_, not data_
+// ============================================================================
+TEST(DataPtr, DeleterReceivesCtxNotData) {
+  resetSpy();
+
+  int user_data = 0;
+  int context_data = 0;
+  void* user_ptr = &user_data;
+  void* ctx_ptr = &context_data;
+
+  {
+    DataPtr dp(user_ptr, ctx_ptr, spyDeleter, Device::cpu());
+    EXPECT_EQ(dp.get(), user_ptr);
+    EXPECT_EQ(dp.get_context(), ctx_ptr);
+  }
+
+  // The deleter should have received ctx_ptr, NOT user_ptr.
+  EXPECT_EQ(g_received_ctx, ctx_ptr);
+  EXPECT_NE(g_received_ctx, user_ptr);
+  EXPECT_EQ(g_deleter_calls, 1);
+}
+
+// ============================================================================
+// 14. release_context returns the context pointer
+// ============================================================================
+TEST(DataPtr, ReleaseContextReturnsCtx) {
+  int ctx_obj = 99;
+  DataPtr dp(&ctx_obj, &ctx_obj, deleteNothing, Device::cpu());
+
+  void* released = dp.release_context();
+  EXPECT_EQ(released, &ctx_obj);
+}
+
+// ============================================================================
+// 15. release_context prevents destructor from firing
+// ============================================================================
+TEST(DataPtr, ReleaseContextPreventsDeleter) {
+  DeleterTracker tracker;
+  {
+    DataPtr dp(&tracker, &tracker, trackingDeleter, Device::cpu());
+    void* ctx = dp.release_context();
+    EXPECT_EQ(ctx, &tracker);
+    EXPECT_EQ(dp.get(), nullptr);
+    EXPECT_EQ(dp.get_context(), nullptr);
+    EXPECT_EQ(dp.get_deleter(), nullptr);
+  }  // dp destructor runs but should NOT call deleter
+  EXPECT_EQ(tracker.call_count, 0);
+}
+
+// ============================================================================
+// 16. clear frees immediately
+// ============================================================================
+TEST(DataPtr, ClearFreesImmediately) {
+  DeleterTracker tracker;
+  DataPtr dp(&tracker, &tracker, trackingDeleter, Device::cpu());
+  EXPECT_EQ(tracker.call_count, 0);
+
+  dp.clear();
+  EXPECT_EQ(tracker.call_count, 1);  // freed by clear()
+  EXPECT_EQ(dp.get(), nullptr);
+  EXPECT_EQ(dp.get_context(), nullptr);
+  EXPECT_EQ(dp.get_deleter(), nullptr);
+}
+
+// ============================================================================
+// 17. clear nulls all fields
+// ============================================================================
+TEST(DataPtr, ClearNullsAllFields) {
+  void* raw = std::malloc(8);
+  DataPtr dp(raw, deleteCPU, Device::cpu());
+
+  dp.clear();
+  EXPECT_EQ(dp.get(), nullptr);
+  EXPECT_EQ(dp.get_context(), nullptr);
+  EXPECT_EQ(dp.get_deleter(), nullptr);
+  EXPECT_FALSE(static_cast<bool>(dp));
+}
+
+// ============================================================================
+// 18. Double clear is safe — no double free
+// ============================================================================
+TEST(DataPtr, DoubleClearIsSafe) {
+  DeleterTracker tracker;
+  DataPtr dp(&tracker, &tracker, trackingDeleter, Device::cpu());
+
+  dp.clear();
+  EXPECT_EQ(tracker.call_count, 1);
+
+  dp.clear();  // second clear — should be a no-op
+  EXPECT_EQ(tracker.call_count, 1);  // still 1, not 2
+}
+
+// ============================================================================
+// 19. Device stored correctly — CPU
+// ============================================================================
+TEST(DataPtr, DeviceStoredCPU) {
+  int dummy = 0;
+  DataPtr dp(&dummy, deleteNothing, Device::cpu());
+  EXPECT_TRUE(dp.device().is_cpu());
+  EXPECT_FALSE(dp.device().is_cuda());
+  EXPECT_EQ(dp.device().index, 0);
+}
+
+// ============================================================================
+// 20. Device stored correctly — CUDA with index
+// ============================================================================
+TEST(DataPtr, DeviceStoredCUDA) {
+  int dummy = 0;
+  DataPtr dp(&dummy, deleteNothing, Device::cuda(3));
+  EXPECT_TRUE(dp.device().is_cuda());
+  EXPECT_FALSE(dp.device().is_cpu());
+  EXPECT_EQ(dp.device().index, 3);
+}
+
+}  // namespace
+</file>
+
+<file path="test/c10/device_test.cpp">
+#include <gtest/gtest.h>
+#include "c10/core/Device.h"
+
+namespace {
+
+using namespace c10;
+
+// 1. CPU device type is correct
+TEST(DeviceTest, CPUDeviceTypeIsCorrect) {
+  Device d(DeviceType::CPU);
+  EXPECT_EQ(d.type, DeviceType::CPU);
+}
+
+// 2. CPU device index is 0
+TEST(DeviceTest, CPUDeviceIndexIsZero) {
+  Device d(DeviceType::CPU);
+  EXPECT_EQ(d.index, 0);
+}
+
+// 3. is_cpu() true for CPU
+TEST(DeviceTest, IsCPUTrueForCPU) {
+  Device d(DeviceType::CPU);
+  EXPECT_TRUE(d.is_cpu());
+}
+
+// 4. is_cuda() false for CPU
+TEST(DeviceTest, IsCUDAFalseForCPU) {
+  Device d(DeviceType::CPU);
+  EXPECT_FALSE(d.is_cuda());
+}
+
+// 5. CUDA device type is correct
+TEST(DeviceTest, CUDADeviceTypeIsCorrect) {
+  Device d(DeviceType::CUDA);
+  EXPECT_EQ(d.type, DeviceType::CUDA);
+}
+
+// 6. CUDA device default index is 0
+TEST(DeviceTest, CUDADeviceDefaultIndexIsZero) {
+  Device d(DeviceType::CUDA);
+  EXPECT_EQ(d.index, 0);
+}
+
+// 7. CUDA device explicit index stored correctly
+TEST(DeviceTest, CUDADeviceExplicitIndexIsStored) {
+  Device d(DeviceType::CUDA, 1);
+  EXPECT_EQ(d.index, 1);
+}
+
+// 8. is_cuda() true for CUDA
+TEST(DeviceTest, IsCUDATrueForCUDA) {
+  Device d(DeviceType::CUDA);
+  EXPECT_TRUE(d.is_cuda());
+}
+
+// 9. is_cpu() false for CUDA
+TEST(DeviceTest, IsCPUFalseForCUDA) {
+  Device d(DeviceType::CUDA);
+  EXPECT_FALSE(d.is_cpu());
+}
+
+// 10. CPU == CPU same index
+TEST(DeviceTest, CPUEquality) {
+  Device d1(DeviceType::CPU);
+  Device d2(DeviceType::CPU);
+  EXPECT_EQ(d1, d2);
+}
+
+// 11. CPU != CUDA
+TEST(DeviceTest, CPUCUDANotEqual) {
+  Device d1(DeviceType::CPU);
+  Device d2(DeviceType::CUDA);
+  EXPECT_NE(d1, d2);
+}
+
+// 12. CUDA index 0 != CUDA index 1
+TEST(DeviceTest, CUDAIndexEquality) {
+  Device d1(DeviceType::CUDA, 0);
+  Device d2(DeviceType::CUDA, 1);
+  EXPECT_NE(d1, d2);
+}
+
+// 13. Device::cpu() convenience constructor works
+TEST(DeviceTest, CPUFactory) {
+  Device d = Device::cpu();
+  EXPECT_TRUE(d.is_cpu());
+  EXPECT_EQ(d.index, 0);
+}
+
+// 14. Device::cuda() convenience constructor works
+TEST(DeviceTest, CUDAFactory) {
+  Device d = Device::cuda();
+  EXPECT_TRUE(d.is_cuda());
+  EXPECT_EQ(d.index, 0);
+}
+
+// 15. Device::cuda(2) stores index 2 correctly
+TEST(DeviceTest, CUDAFactoryWithIndex) {
+  Device d = Device::cuda(2);
+  EXPECT_TRUE(d.is_cuda());
+  EXPECT_EQ(d.index, 2);
+}
+
+// 16. str() returns "cpu" for CPU device
+TEST(DeviceTest, CPUStr) {
+  Device d = Device::cpu();
+  EXPECT_STREQ(d.str(), "cpu");
+}
+
+// 17. str() returns "cuda" for CUDA device
+TEST(DeviceTest, CUDAStr) {
+  Device d = Device::cuda();
+  EXPECT_STREQ(d.str(), "cuda");
+}
+
+} // namespace
+</file>
+
+<file path="test/c10/storage_impl_test.cpp">
+// ============================================================================
+// Tests for c10::StorageImpl
+// ============================================================================
+//
+// 14 test cases covering:
+//   - Construction with allocator (non-null, correct size, correct device)
+//   - data() returns correct raw pointer
+//   - nbytes() returns correct size
+//   - device() returns correct device
+//   - Not copyable (type traits)
+//   - Movable (ownership transfers)
+//   - Shared ownership via intrusive_ptr (refcount, lifetime)
+//   - Destroyed when last intrusive_ptr dies
+//   - Resize larger (data preserved)
+//   - Resize smaller
+//   - Resize on non-resizable storage asserts
+//   - External DataPtr construction
+//   - Empty/zero-size storage
+//   - Allocator pointer stored correctly
+
+#include <gtest/gtest.h>
+
+#include <cstdint>
+#include <cstring>
+#include <type_traits>
+
+#include "c10/core/CPUAllocator.h"
+#include "c10/core/StorageImpl.h"
+#include "c10/util/intrusive_ptr.h"
+
+namespace {
+
+using namespace c10;
+
+// ============================================================================
+// 1. Construction with CPUAllocator — data non-null, size correct, device CPU
+// ============================================================================
+TEST(StorageImpl, ConstructWithAllocator) {
+  auto storage = make_intrusive<StorageImpl>(256, GetCPUAllocator());
+  EXPECT_NE(storage->data(), nullptr);
+  EXPECT_EQ(storage->nbytes(), 256u);
+  EXPECT_TRUE(storage->device().is_cpu());
+}
+
+// ============================================================================
+// 2. data() returns the correct raw pointer
+// ============================================================================
+TEST(StorageImpl, DataReturnsRawPointer) {
+  auto storage = make_intrusive<StorageImpl>(64, GetCPUAllocator());
+  void* ptr = storage->data();
+  ASSERT_NE(ptr, nullptr);
+  // Write and read back to prove it's real.
+  std::memset(ptr, 0xCD, 64);
+  EXPECT_EQ(static_cast<unsigned char*>(ptr)[0], 0xCD);
+  EXPECT_EQ(static_cast<unsigned char*>(ptr)[63], 0xCD);
+}
+
+// ============================================================================
+// 3. nbytes() returns the allocated size
+// ============================================================================
+TEST(StorageImpl, NbytesReturnsCorrectSize) {
+  auto s1 = make_intrusive<StorageImpl>(100, GetCPUAllocator());
+  auto s2 = make_intrusive<StorageImpl>(4096, GetCPUAllocator());
+  EXPECT_EQ(s1->nbytes(), 100u);
+  EXPECT_EQ(s2->nbytes(), 4096u);
+}
+
+// ============================================================================
+// 4. device() returns CPU
+// ============================================================================
+TEST(StorageImpl, DeviceIsCPU) {
+  auto storage = make_intrusive<StorageImpl>(32, GetCPUAllocator());
+  EXPECT_TRUE(storage->device().is_cpu());
+  EXPECT_EQ(storage->device().index, 0);
+}
+
+// ============================================================================
+// 5. Not copyable — verified via type traits
+// ============================================================================
+TEST(StorageImpl, NotCopyable) {
+  EXPECT_FALSE(std::is_copy_constructible<StorageImpl>::value);
+  EXPECT_FALSE(std::is_copy_assignable<StorageImpl>::value);
+}
+
+// ============================================================================
+// 6. Movable — ownership transfers, source left empty
+// ============================================================================
+TEST(StorageImpl, Movable) {
+  StorageImpl src(64, GetCPUAllocator());
+  void* orig_ptr = src.data();
+  EXPECT_NE(orig_ptr, nullptr);
+
+  StorageImpl dst(std::move(src));
+  EXPECT_EQ(dst.data(), orig_ptr);
+  EXPECT_EQ(dst.nbytes(), 64u);
+  // Source should be empty after move.
+  EXPECT_EQ(src.data(), nullptr);   // NOLINT: intentional use-after-move
+  EXPECT_EQ(src.nbytes(), 0u);     // NOLINT
+}
+
+// ============================================================================
+// 7. Shared ownership via intrusive_ptr — refcount correct
+// ============================================================================
+TEST(StorageImpl, SharedOwnershipRefcount) {
+  auto s1 = make_intrusive<StorageImpl>(128, GetCPUAllocator());
+  EXPECT_EQ(s1.use_count(), 1u);
+
+  auto s2 = s1;  // copy intrusive_ptr
+  EXPECT_EQ(s1.use_count(), 2u);
+  EXPECT_EQ(s2.use_count(), 2u);
+  EXPECT_EQ(s1->data(), s2->data());  // same underlying memory
+}
+
+// ============================================================================
+// 8. Destroyed when last intrusive_ptr dies
+// ============================================================================
+TEST(StorageImpl, DestroyedWhenLastRefDies) {
+  intrusive_ptr<StorageImpl> outer;
+  {
+    auto inner = make_intrusive<StorageImpl>(64, GetCPUAllocator());
+    outer = inner;  // refcount = 2
+    EXPECT_EQ(outer.use_count(), 2u);
+  }  // inner dies — refcount = 1
+  EXPECT_EQ(outer.use_count(), 1u);
+  EXPECT_NE(outer->data(), nullptr);
+  // When outer dies, the StorageImpl and its DataPtr are freed.
+  // ASan validates — no leak.
+}
+
+// ============================================================================
+// 9. Resize larger — data preserved, new size correct
+// ============================================================================
+TEST(StorageImpl, ResizeLarger) {
+  auto storage = make_intrusive<StorageImpl>(64, GetCPUAllocator());
+  // Write a known pattern.
+  std::memset(storage->data(), 0xAB, 64);
+
+  storage->resize(256);
+  EXPECT_EQ(storage->nbytes(), 256u);
+  EXPECT_NE(storage->data(), nullptr);
+
+  // Old data should be preserved in the first 64 bytes.
+  auto* bytes = static_cast<unsigned char*>(storage->data());
+  for (size_t i = 0; i < 64; ++i) {
+    EXPECT_EQ(bytes[i], 0xAB) << "Byte " << i << " not preserved after resize";
+  }
+}
+
+// ============================================================================
+// 10. Resize smaller — new size correct
+// ============================================================================
+TEST(StorageImpl, ResizeSmaller) {
+  auto storage = make_intrusive<StorageImpl>(256, GetCPUAllocator());
+  std::memset(storage->data(), 0xCD, 256);
+
+  storage->resize(32);
+  EXPECT_EQ(storage->nbytes(), 32u);
+  EXPECT_NE(storage->data(), nullptr);
+
+  // First 32 bytes should be preserved.
+  auto* bytes = static_cast<unsigned char*>(storage->data());
+  for (size_t i = 0; i < 32; ++i) {
+    EXPECT_EQ(bytes[i], 0xCD) << "Byte " << i << " not preserved after shrink";
+  }
+}
+
+// ============================================================================
+// 11. Resize on non-resizable storage — death test
+// ============================================================================
+TEST(StorageImplDeathTest, ResizeNonResizable) {
+  auto storage = make_intrusive<StorageImpl>(64, GetCPUAllocator());
+  storage->set_resizable(false);
+  EXPECT_DEATH(storage->resize(128), "");
+}
+
+// ============================================================================
+// 12. External DataPtr construction — wrapping foreign memory
+// ============================================================================
+TEST(StorageImpl, ExternalDataPtr) {
+  // Simulate externally provided memory.
+  void* external = std::malloc(512);
+  ASSERT_NE(external, nullptr);
+  std::memset(external, 0x42, 512);
+
+  {
+    DataPtr dp(external, deleteCPU, Device::cpu());
+    auto storage = make_intrusive<StorageImpl>(512, std::move(dp), nullptr);
+
+    EXPECT_EQ(storage->data(), external);
+    EXPECT_EQ(storage->nbytes(), 512u);
+    EXPECT_EQ(storage->allocator(), nullptr);
+    EXPECT_TRUE(storage->device().is_cpu());
+    // Not resizable when allocator is null.
+    EXPECT_FALSE(storage->resizable());
+  }
+  // storage dies → DataPtr dies → free(external). ASan validates.
+}
+
+// ============================================================================
+// 13. Zero-size storage
+// ============================================================================
+TEST(StorageImpl, ZeroSizeStorage) {
+  auto storage = make_intrusive<StorageImpl>(0, GetCPUAllocator());
+  EXPECT_EQ(storage->nbytes(), 0u);
+  // data() may be null for zero-size — that's fine.
+  EXPECT_TRUE(storage->device().is_cpu());
+}
+
+// ============================================================================
+// 14. Allocator pointer stored correctly
+// ============================================================================
+TEST(StorageImpl, AllocatorStoredCorrectly) {
+  auto* alloc = GetCPUAllocator();
+  auto storage = make_intrusive<StorageImpl>(128, alloc);
+  EXPECT_EQ(storage->allocator(), alloc);
+}
+
+}  // namespace
+</file>
+
+<file path="test/c10/storage_test.cpp">
+// ============================================================================
+// Tests for c10::Storage
+// ============================================================================
+//
+// 16 test cases covering:
+//   - Default construction (invalid)
+//   - Factory construction (create / wrap)
+//   - Forwarding accessors (data, nbytes, device, allocator, resizable)
+//   - Copy semantics (refcount increment, shared ownership)
+//   - Move semantics (ownership transfer, source invalid)
+//   - Equality (same impl == equal, different impl != equal)
+//   - valid() / bool conversion
+//   - resize() forwarding
+//   - use_count() / unique()
+//   - Memory freed when last Storage dies (ASan validates)
+
+#include <gtest/gtest.h>
+
+#include <cstring>
+
+#include "c10/core/CPUAllocator.h"
+#include "c10/core/Storage.h"
+
+namespace {
+
+using namespace c10;
+
+// ============================================================================
+// 1. Default construction is invalid
+// ============================================================================
+TEST(Storage, DefaultConstructionIsInvalid) {
+  Storage s;
+  EXPECT_FALSE(s.valid());
+  EXPECT_FALSE(static_cast<bool>(s));
+}
+
+// ============================================================================
+// 2. Factory create — allocates fresh storage
+// ============================================================================
+TEST(Storage, CreateAllocates) {
+  auto s = Storage::create(256, GetCPUAllocator());
+  EXPECT_TRUE(s.valid());
+  EXPECT_NE(s.data(), nullptr);
+  EXPECT_EQ(s.nbytes(), 256u);
+}
+
+// ============================================================================
+// 3. Factory wrap — wraps external memory
+// ============================================================================
+TEST(Storage, WrapExternalMemory) {
+  void* raw = std::malloc(128);
+  ASSERT_NE(raw, nullptr);
+  std::memset(raw, 0x42, 128);
+
+  auto s = Storage::wrap(128, DataPtr(raw, deleteCPU, Device::cpu()));
+  EXPECT_TRUE(s.valid());
+  EXPECT_EQ(s.data(), raw);
+  EXPECT_EQ(s.nbytes(), 128u);
+  EXPECT_TRUE(s.device().is_cpu());
+  // Storage destructor frees raw. ASan validates.
+}
+
+// ============================================================================
+// 4. data() returns correct pointer
+// ============================================================================
+TEST(Storage, DataAccessor) {
+  auto s = Storage::create(64, GetCPUAllocator());
+  void* ptr = s.data();
+  ASSERT_NE(ptr, nullptr);
+  // Write and read to prove it's real.
+  std::memset(ptr, 0xAB, 64);
+  EXPECT_EQ(static_cast<unsigned char*>(ptr)[0], 0xAB);
+}
+
+// ============================================================================
+// 5. nbytes() returns correct size
+// ============================================================================
+TEST(Storage, NbytesAccessor) {
+  auto s = Storage::create(1024, GetCPUAllocator());
+  EXPECT_EQ(s.nbytes(), 1024u);
+}
+
+// ============================================================================
+// 6. device() returns CPU
+// ============================================================================
+TEST(Storage, DeviceAccessor) {
+  auto s = Storage::create(32, GetCPUAllocator());
+  EXPECT_TRUE(s.device().is_cpu());
+  EXPECT_EQ(s.device().index, 0);
+}
+
+// ============================================================================
+// 7. allocator() returns correct pointer
+// ============================================================================
+TEST(Storage, AllocatorAccessor) {
+  auto* alloc = GetCPUAllocator();
+  auto s = Storage::create(64, alloc);
+  EXPECT_EQ(s.allocator(), alloc);
+}
+
+// ============================================================================
+// 8. resizable() default is true for allocator-constructed
+// ============================================================================
+TEST(Storage, ResizableDefault) {
+  auto s = Storage::create(64, GetCPUAllocator());
+  EXPECT_TRUE(s.resizable());
+}
+
+// ============================================================================
+// 9. Copy increments refcount — shared ownership
+// ============================================================================
+TEST(Storage, CopySharesOwnership) {
+  auto s1 = Storage::create(128, GetCPUAllocator());
+  EXPECT_EQ(s1.use_count(), 1u);
+  EXPECT_TRUE(s1.unique());
+
+  auto s2 = s1;  // copy
+  EXPECT_EQ(s1.use_count(), 2u);
+  EXPECT_EQ(s2.use_count(), 2u);
+  EXPECT_FALSE(s1.unique());
+  EXPECT_EQ(s1.data(), s2.data());  // same underlying memory
+  EXPECT_EQ(s1, s2);                // identity equal
+}
+
+// ============================================================================
+// 10. Move transfers ownership — source becomes invalid
+// ============================================================================
+TEST(Storage, MoveTransfersOwnership) {
+  auto s1 = Storage::create(64, GetCPUAllocator());
+  void* orig_ptr = s1.data();
+
+  auto s2 = std::move(s1);
+  EXPECT_TRUE(s2.valid());
+  EXPECT_EQ(s2.data(), orig_ptr);
+  EXPECT_EQ(s2.use_count(), 1u);
+  EXPECT_FALSE(s1.valid());  // NOLINT: intentional use-after-move
+}
+
+// ============================================================================
+// 11. Equality — same impl is equal, different impl is not
+// ============================================================================
+TEST(Storage, EqualityComparison) {
+  auto s1 = Storage::create(64, GetCPUAllocator());
+  auto s2 = s1;  // copy — same impl
+  auto s3 = Storage::create(64, GetCPUAllocator());  // different impl
+
+  EXPECT_EQ(s1, s2);
+  EXPECT_NE(s1, s3);
+}
+
+// ============================================================================
+// 12. resize() forwards to StorageImpl
+// ============================================================================
+TEST(Storage, ResizeForwards) {
+  auto s = Storage::create(64, GetCPUAllocator());
+  std::memset(s.data(), 0xCD, 64);
+
+  s.resize(256);
+  EXPECT_EQ(s.nbytes(), 256u);
+  // First 64 bytes preserved.
+  auto* bytes = static_cast<unsigned char*>(s.data());
+  for (size_t i = 0; i < 64; ++i) {
+    EXPECT_EQ(bytes[i], 0xCD) << "Byte " << i << " not preserved";
+  }
+}
+
+// ============================================================================
+// 13. set_resizable() forwards correctly
+// ============================================================================
+TEST(Storage, SetResizable) {
+  auto s = Storage::create(64, GetCPUAllocator());
+  EXPECT_TRUE(s.resizable());
+  s.set_resizable(false);
+  EXPECT_FALSE(s.resizable());
+}
+
+// ============================================================================
+// 14. use_count() and unique()
+// ============================================================================
+TEST(Storage, UseCountAndUnique) {
+  auto s1 = Storage::create(32, GetCPUAllocator());
+  EXPECT_EQ(s1.use_count(), 1u);
+  EXPECT_TRUE(s1.unique());
+
+  {
+    auto s2 = s1;
+    EXPECT_EQ(s1.use_count(), 2u);
+    EXPECT_FALSE(s1.unique());
+  }
+
+  EXPECT_EQ(s1.use_count(), 1u);
+  EXPECT_TRUE(s1.unique());
+}
+
+// ============================================================================
+// 15. Memory freed when last Storage dies — ASan validates
+// ============================================================================
+TEST(Storage, MemoryFreedOnLastDeath) {
+  {
+    auto s1 = Storage::create(512, GetCPUAllocator());
+    std::memset(s1.data(), 0xFF, 512);
+    {
+      auto s2 = s1;  // refcount = 2
+      EXPECT_EQ(s2.use_count(), 2u);
+    }  // s2 dies — refcount = 1, memory still alive
+    EXPECT_NE(s1.data(), nullptr);
+  }  // s1 dies — refcount = 0, memory freed. ASan validates.
+}
+
+// ============================================================================
+// 16. Construct from raw StorageImpl pointer
+// ============================================================================
+TEST(Storage, ConstructFromRawPointer) {
+  auto* raw = new StorageImpl(64, GetCPUAllocator());
+  Storage s(raw);
+  EXPECT_TRUE(s.valid());
+  EXPECT_EQ(s.nbytes(), 64u);
+  EXPECT_EQ(s.use_count(), 1u);
+  // s destructor destroys the StorageImpl. ASan validates.
+}
+
+}  // namespace
+</file>
+
+<file path="test/c10/tensor_impl_test.cpp">
+#include <gtest/gtest.h>
+#include "c10/core/TensorImpl.h"
+#include "c10/core/CPUAllocator.h"
+
+namespace {
+
+using namespace c10;
+
+// ============================================================================
+// 1. Construction with explicit sizes and strides
+// ============================================================================
+TEST(TensorImpl, ExplicitConstruction) {
+  auto storage = Storage::create(64 * 4, GetCPUAllocator());
+  std::vector<int64_t> sizes = {2, 3};
+  std::vector<int64_t> strides = {3, 1};
+  auto impl = make_intrusive<TensorImpl>(storage, ScalarType::Float32, sizes, strides, 5);
+
+  EXPECT_EQ(impl->sizes(), sizes);
+  EXPECT_EQ(impl->strides(), strides);
+  EXPECT_EQ(impl->dtype(), ScalarType::Float32);
+  EXPECT_EQ(impl->storage_offset(), 5);
+}
+
+// ============================================================================
+// 2. Construction with sizes only — strides computed automatically
+// ============================================================================
+TEST(TensorImpl, AutomaticStrides) {
+  auto storage = Storage::create(64 * 4, GetCPUAllocator());
+  std::vector<int64_t> sizes = {3, 4};
+  auto impl = make_intrusive<TensorImpl>(storage, ScalarType::Float32, sizes);
+
+  std::vector<int64_t> expected_strides = {4, 1};
+  EXPECT_EQ(impl->strides(), expected_strides);
+  EXPECT_TRUE(impl->is_contiguous());
+}
+
+// ============================================================================
+// 3. ndim() returns correct number of dimensions
+// ============================================================================
+TEST(TensorImpl, Ndim) {
+  auto storage = Storage::create(64 * 4, GetCPUAllocator());
+  auto impl1 = make_intrusive<TensorImpl>(storage, ScalarType::Float32, std::vector<int64_t>{2, 3, 4});
+  EXPECT_EQ(impl1->ndim(), 3);
+
+  auto impl2 = make_intrusive<TensorImpl>(storage, ScalarType::Float32, std::vector<int64_t>{10});
+  EXPECT_EQ(impl2->ndim(), 1);
+
+  auto impl3 = make_intrusive<TensorImpl>(storage, ScalarType::Float32, std::vector<int64_t>{});
+  EXPECT_EQ(impl3->ndim(), 0);
+}
+
+// ============================================================================
+// 4. numel() returns correct product of sizes
+// ============================================================================
+TEST(TensorImpl, Numel) {
+  auto storage = Storage::create(256, GetCPUAllocator());
+  auto impl = make_intrusive<TensorImpl>(storage, ScalarType::Float32, std::vector<int64_t>{3, 4, 5});
+  EXPECT_EQ(impl->numel(), 60);
+}
+
+// ============================================================================
+// 5. is_contiguous() true for freshly allocated row-major tensor
+// ============================================================================
+TEST(TensorImpl, IsContiguousFresh) {
+  auto storage = Storage::create(256, GetCPUAllocator());
+  auto impl = make_intrusive<TensorImpl>(storage, ScalarType::Float32, std::vector<int64_t>{2, 5, 3});
+  EXPECT_TRUE(impl->is_contiguous());
+}
+
+// ============================================================================
+// 6. Strides for a 2D contiguous tensor are [ncols, 1]
+// ============================================================================
+TEST(TensorImpl, 2DStrides) {
+  auto storage = Storage::create(256, GetCPUAllocator());
+  int64_t rows = 3;
+  int64_t cols = 7;
+  auto impl = make_intrusive<TensorImpl>(storage, ScalarType::Float32, std::vector<int64_t>{rows, cols});
+  EXPECT_EQ(impl->strides()[0], cols);
+  EXPECT_EQ(impl->strides()[1], 1);
+}
+
+// ============================================================================
+// 7. data_ptr() with zero offset returns same pointer as storage.data()
+// ============================================================================
+TEST(TensorImpl, DataPtrZeroOffset) {
+  auto storage = Storage::create(256, GetCPUAllocator());
+  auto impl = make_intrusive<TensorImpl>(storage, ScalarType::Float32, std::vector<int64_t>{10}, 0);
+  EXPECT_EQ(impl->data(), storage.data());
+}
+
+// ============================================================================
+// 8. data_ptr() with non-zero offset returns correctly shifted pointer
+// ============================================================================
+TEST(TensorImpl, DataPtrNonZeroOffset) {
+  auto storage = Storage::create(256, GetCPUAllocator());
+  int64_t offset = 10;
+  auto impl = make_intrusive<TensorImpl>(storage, ScalarType::Float32, std::vector<int64_t>{5}, offset);
+  
+  void* expected = static_cast<char*>(storage.data()) + offset * sizeof(float);
+  EXPECT_EQ(impl->data(), expected);
+}
+
+// ============================================================================
+// 9. ScalarType stored and retrieved correctly
+// ============================================================================
+TEST(TensorImpl, ScalarTypeCheck) {
+  auto storage = Storage::create(256, GetCPUAllocator());
+  auto impl = make_intrusive<TensorImpl>(storage, ScalarType::Int64, std::vector<int64_t>{2});
+  EXPECT_EQ(impl->dtype(), ScalarType::Int64);
+}
+
+// ============================================================================
+// 10. elementSize returns correct byte count
+// ============================================================================
+TEST(TensorImpl, ElementSizeCheck) {
+  EXPECT_EQ(elementSize(ScalarType::Float32), 4);
+  EXPECT_EQ(elementSize(ScalarType::Int8), 1);
+  EXPECT_EQ(elementSize(ScalarType::Float16), 2);
+  EXPECT_EQ(elementSize(ScalarType::Int64), 8);
+}
+
+// ============================================================================
+// 11. Device forwarded correctly from storage
+// ============================================================================
+TEST(TensorImpl, DeviceForwarding) {
+  auto storage = Storage::create(256, GetCPUAllocator());
+  auto impl = make_intrusive<TensorImpl>(storage, ScalarType::Float32, std::vector<int64_t>{2});
+  EXPECT_EQ(impl->device(), storage.device());
+  EXPECT_TRUE(impl->device().is_cpu());
+}
+
+// ============================================================================
+// 12. Storage sharing — refcount is 2
+// ============================================================================
+TEST(TensorImpl, StorageSharing) {
+  auto storage = Storage::create(256, GetCPUAllocator());
+  {
+    auto impl1 = make_intrusive<TensorImpl>(storage, ScalarType::Float32, std::vector<int64_t>{10});
+    auto impl2 = make_intrusive<TensorImpl>(storage, ScalarType::Float32, std::vector<int64_t>{5}, 5);
+    EXPECT_EQ(storage.use_count(), 3); // storage, impl1->storage, impl2->storage
+  }
+  EXPECT_EQ(storage.use_count(), 1);
+}
+
+// ============================================================================
+// 13. Scalar tensor — zero dimensions, one element, numel is 1
+// ============================================================================
+TEST(TensorImpl, ScalarTensor) {
+  auto storage = Storage::create(4, GetCPUAllocator());
+  auto impl = make_intrusive<TensorImpl>(storage, ScalarType::Float32, std::vector<int64_t>{});
+  EXPECT_EQ(impl->ndim(), 0);
+  EXPECT_EQ(impl->numel(), 1);
+  EXPECT_TRUE(impl->is_contiguous());
+}
+
+// ============================================================================
+// 14. 1D tensor — sizes [n], strides [1], is_contiguous true
+// ============================================================================
+TEST(TensorImpl, 1DTensorContiguous) {
+  auto storage = Storage::create(40, GetCPUAllocator());
+  auto impl = make_intrusive<TensorImpl>(storage, ScalarType::Float32, std::vector<int64_t>{10});
+  EXPECT_EQ(impl->strides()[0], 1);
+  EXPECT_TRUE(impl->is_contiguous());
+}
+
+// ============================================================================
+// 15. Non-contiguous strides — manually set strides returns false
+// ============================================================================
+TEST(TensorImpl, NonContiguous) {
+  auto storage = Storage::create(100, GetCPUAllocator());
+  // 2x2 matrix, but strides are [1, 2] instead of [2, 1] (column-major)
+  auto impl = make_intrusive<TensorImpl>(storage, ScalarType::Float32, std::vector<int64_t>{2, 2}, std::vector<int64_t>{1, 2});
+  EXPECT_FALSE(impl->is_contiguous());
+}
+
+// ============================================================================
+// 16. Offset preservation during construction
+// ============================================================================
+TEST(TensorImpl, OffsetPreservation) {
+  auto storage = Storage::create(100, GetCPUAllocator());
+  auto impl = make_intrusive<TensorImpl>(storage, ScalarType::Int32, std::vector<int64_t>{4}, 7);
+  EXPECT_EQ(impl->storage_offset(), 7);
+}
+
+} // namespace
+</file>
+
+<file path="test/c10/tensor_test.cpp">
+// ============================================================================
+// Tests for c10::Tensor — the user-facing tensor handle
+// ============================================================================
+//
+// 16 test cases covering:
+//   1.  Default construction is undefined
+//   2.  Tensor::empty creates valid tensor with correct shape
+//   3.  sizes() returns correct values
+//   4.  strides() returns correct values (auto-computed, contiguous)
+//   5.  dtype() returns correct type
+//   6.  numel() returns correct product of sizes
+//   7.  ndim() returns correct dimensions
+//   8.  is_contiguous() true for freshly allocated tensor
+//   9.  data_ptr() returns non-null for valid tensor
+//  10.  Typed data_ptr<float>() read/write
+//  11.  device() returns CPU
+//  12.  Copy shares ownership (refcount increment)
+//  13.  Move transfers ownership (source becomes undefined)
+//  14.  Equality comparison (same impl equal, different not)
+//  15.  from_blob wraps external memory correctly
+//  16.  size(dim) and stride(dim) per-dimension accessors
+
+#include <gtest/gtest.h>
+
+#include <cstring>
+#include <vector>
+
+#include "c10/core/CPUAllocator.h"
+#include "c10/core/Tensor.h"
+
+namespace {
+
+using namespace c10;
+
+// ============================================================================
+// 1. Default construction is undefined
+// ============================================================================
+TEST(Tensor, DefaultConstructionIsUndefined) {
+  Tensor t;
+  EXPECT_FALSE(t.defined());
+  EXPECT_FALSE(static_cast<bool>(t));
+}
+
+// ============================================================================
+// 2. Tensor::empty creates valid tensor with correct shape
+// ============================================================================
+TEST(Tensor, EmptyCreatesValid) {
+  auto t = Tensor::empty({3, 4}, ScalarType::Float32);
+  EXPECT_TRUE(t.defined());
+  EXPECT_NE(t.data_ptr(), nullptr);
+  EXPECT_EQ(t.sizes().size(), 2u);
+  EXPECT_EQ(t.sizes()[0], 3);
+  EXPECT_EQ(t.sizes()[1], 4);
+}
+
+// ============================================================================
+// 3. sizes() returns correct values
+// ============================================================================
+TEST(Tensor, SizesAccessor) {
+  auto t = Tensor::empty({2, 5, 3}, ScalarType::Float32);
+  std::vector<int64_t> expected = {2, 5, 3};
+  EXPECT_EQ(t.sizes(), expected);
+}
+
+// ============================================================================
+// 4. strides() auto-computed for contiguous layout
+// ============================================================================
+TEST(Tensor, StridesAutoComputed) {
+  auto t = Tensor::empty({3, 4}, ScalarType::Float32);
+  // Row-major contiguous: strides = [4, 1]
+  std::vector<int64_t> expected = {4, 1};
+  EXPECT_EQ(t.strides(), expected);
+}
+
+// ============================================================================
+// 5. dtype() returns correct type
+// ============================================================================
+TEST(Tensor, DtypeAccessor) {
+  auto t1 = Tensor::empty({2}, ScalarType::Float32);
+  EXPECT_EQ(t1.dtype(), ScalarType::Float32);
+
+  auto t2 = Tensor::empty({2}, ScalarType::Int64);
+  EXPECT_EQ(t2.dtype(), ScalarType::Int64);
+}
+
+// ============================================================================
+// 6. numel() returns correct product of sizes
+// ============================================================================
+TEST(Tensor, NumelAccessor) {
+  auto t = Tensor::empty({3, 4, 5}, ScalarType::Float32);
+  EXPECT_EQ(t.numel(), 60);
+}
+
+// ============================================================================
+// 7. ndim() returns correct dimensions
+// ============================================================================
+TEST(Tensor, NdimAccessor) {
+  auto t0 = Tensor::empty({}, ScalarType::Float32);       // scalar
+  auto t1 = Tensor::empty({10}, ScalarType::Float32);     // 1D
+  auto t3 = Tensor::empty({2, 3, 4}, ScalarType::Float32); // 3D
+
+  EXPECT_EQ(t0.ndim(), 0);
+  EXPECT_EQ(t1.ndim(), 1);
+  EXPECT_EQ(t3.ndim(), 3);
+}
+
+// ============================================================================
+// 8. is_contiguous() true for freshly allocated tensor
+// ============================================================================
+TEST(Tensor, IsContiguousFresh) {
+  auto t = Tensor::empty({4, 5, 6}, ScalarType::Float32);
+  EXPECT_TRUE(t.is_contiguous());
+}
+
+// ============================================================================
+// 9. data_ptr() returns non-null for valid tensor
+// ============================================================================
+TEST(Tensor, DataPtrNonNull) {
+  auto t = Tensor::empty({8}, ScalarType::Float32);
+  EXPECT_NE(t.data_ptr(), nullptr);
+}
+
+// ============================================================================
+// 10. Typed data_ptr<float>() read/write round-trip
+// ============================================================================
+TEST(Tensor, TypedDataPtrReadWrite) {
+  auto t = Tensor::empty({4}, ScalarType::Float32);
+  float* p = t.data_ptr<float>();
+  ASSERT_NE(p, nullptr);
+
+  p[0] = 1.0f;
+  p[1] = 2.0f;
+  p[2] = 3.0f;
+  p[3] = 4.0f;
+
+  EXPECT_FLOAT_EQ(t.data_ptr<float>()[0], 1.0f);
+  EXPECT_FLOAT_EQ(t.data_ptr<float>()[1], 2.0f);
+  EXPECT_FLOAT_EQ(t.data_ptr<float>()[2], 3.0f);
+  EXPECT_FLOAT_EQ(t.data_ptr<float>()[3], 4.0f);
+}
+
+// ============================================================================
+// 11. device() returns CPU
+// ============================================================================
+TEST(Tensor, DeviceIsCPU) {
+  auto t = Tensor::empty({2, 3}, ScalarType::Float32);
+  EXPECT_TRUE(t.device().is_cpu());
+  EXPECT_EQ(t.device().index, 0);
+}
+
+// ============================================================================
+// 12. Copy shares ownership — refcount increments
+// ============================================================================
+TEST(Tensor, CopySharesOwnership) {
+  auto t1 = Tensor::empty({3, 4}, ScalarType::Float32);
+  EXPECT_EQ(t1.use_count(), 1u);
+  EXPECT_TRUE(t1.unique());
+
+  auto t2 = t1;  // copy
+  EXPECT_EQ(t1.use_count(), 2u);
+  EXPECT_EQ(t2.use_count(), 2u);
+  EXPECT_FALSE(t1.unique());
+
+  // Same underlying data
+  EXPECT_EQ(t1.data_ptr(), t2.data_ptr());
+  EXPECT_EQ(t1, t2);  // identity equal
+}
+
+// ============================================================================
+// 13. Move transfers ownership — source becomes undefined
+// ============================================================================
+TEST(Tensor, MoveTransfersOwnership) {
+  auto t1 = Tensor::empty({5}, ScalarType::Float32);
+  void* orig = t1.data_ptr();
+
+  auto t2 = std::move(t1);
+  EXPECT_TRUE(t2.defined());
+  EXPECT_EQ(t2.data_ptr(), orig);
+  EXPECT_EQ(t2.use_count(), 1u);
+  EXPECT_FALSE(t1.defined());  // NOLINT: intentional use-after-move
+}
+
+// ============================================================================
+// 14. Equality — same impl equal, different impl not equal
+// ============================================================================
+TEST(Tensor, EqualityComparison) {
+  auto t1 = Tensor::empty({4}, ScalarType::Float32);
+  auto t2 = t1;  // copy — same TensorImpl
+  auto t3 = Tensor::empty({4}, ScalarType::Float32);  // different impl
+
+  EXPECT_EQ(t1, t2);
+  EXPECT_NE(t1, t3);
+}
+
+// ============================================================================
+// 15. from_blob wraps external memory correctly
+// ============================================================================
+TEST(Tensor, FromBlobWrapsMemory) {
+  float data[6] = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
+  auto t = Tensor::from_blob(data, {2, 3}, ScalarType::Float32);
+
+  EXPECT_TRUE(t.defined());
+  EXPECT_EQ(t.data_ptr(), static_cast<void*>(data));
+  EXPECT_EQ(t.numel(), 6);
+  EXPECT_TRUE(t.is_contiguous());
+
+  // Read through tensor matches original array
+  float* p = t.data_ptr<float>();
+  EXPECT_FLOAT_EQ(p[0], 1.0f);
+  EXPECT_FLOAT_EQ(p[5], 6.0f);
+
+  // Write through tensor modifies original array
+  p[0] = 42.0f;
+  EXPECT_FLOAT_EQ(data[0], 42.0f);
+}
+
+// ============================================================================
+// 16. size(dim) and stride(dim) per-dimension accessors
+// ============================================================================
+TEST(Tensor, PerDimensionAccessors) {
+  auto t = Tensor::empty({2, 3, 4}, ScalarType::Float32);
+
+  // sizes
+  EXPECT_EQ(t.size(0), 2);
+  EXPECT_EQ(t.size(1), 3);
+  EXPECT_EQ(t.size(2), 4);
+
+  // strides — contiguous: [3*4, 4, 1] = [12, 4, 1]
+  EXPECT_EQ(t.stride(0), 12);
+  EXPECT_EQ(t.stride(1), 4);
+  EXPECT_EQ(t.stride(2), 1);
+}
+
+}  // namespace
+</file>
+
+<file path="test/CMakeLists.txt">
+# ============================================================================
+# Tests — Top-level test driver
+# ============================================================================
+include(FetchContent)
+
+FetchContent_Declare(
+  googletest
+  GIT_REPOSITORY https://github.com/google/googletest.git
+  GIT_TAG        v1.14.0
+)
+
+# Prevent GTest from overriding our compiler/linker settings on Windows.
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
+include(GoogleTest)
+
+# Pull in per-layer test directories.
+add_subdirectory(c10)
+</file>
+
+<file path=".clang-format">
+BasedOnStyle: Google
+ColumnLimit: 80
+IndentWidth: 2
+UseTab: Never
+DerivePointerAlignment: false
+PointerAlignment: Left
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+IncludeBlocks: Regroup
+</file>
+
+<file path=".gitignore">
+# Build
+build/
+cmake-build-*/
+*.o
+*.a
+*.so
+*.dylib
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Compilation database
+compile_commands.json
+</file>
+
+<file path="CMakeLists.txt">
+# ============================================================================
+# Axion — A Pure C++ Deep Learning Framework
+# ============================================================================
+cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
+project(Axion VERSION 0.1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# ---------------------------------------------------------------------------
+# Build options
+# ---------------------------------------------------------------------------
+option(AXION_BUILD_TESTS      "Build unit tests"              ON)
+option(AXION_BUILD_BENCHMARKS "Build benchmarks"              OFF)
+option(AXION_BUILD_EXAMPLES   "Build example programs"        ON)
+option(AXION_USE_CUDA         "Enable CUDA backend"           OFF)
+
+# ---------------------------------------------------------------------------
+# Include paths — mirror the layered architecture
+# ---------------------------------------------------------------------------
+include_directories(${CMAKE_SOURCE_DIR})
+
+# ---------------------------------------------------------------------------
+# Core libraries (bottom-up dependency order)
+# ---------------------------------------------------------------------------
+# Layer 1: c10  — device/type/allocator runtime
+# Layer 2: aten — tensor operations & compute kernels
+# Layer 3: autograd — automatic differentiation engine
+# Layer 4: axion — user-facing API (nn, optim, data)
+
+add_subdirectory(c10)
+add_subdirectory(aten)
+add_subdirectory(autograd)
+add_subdirectory(axion)
+
+# ---------------------------------------------------------------------------
+# Optional targets
+# ---------------------------------------------------------------------------
+if(AXION_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(test)
+endif()
+
+if(AXION_BUILD_BENCHMARKS)
+  add_subdirectory(benchmarks)
+endif()
+
+if(AXION_BUILD_EXAMPLES)
+  add_subdirectory(examples)
+endif()
+
+message(STATUS "")
+message(STATUS "Axion v${PROJECT_VERSION} configuration:")
+message(STATUS "  C++ standard:  ${CMAKE_CXX_STANDARD}")
+message(STATUS "  CUDA:          ${AXION_USE_CUDA}")
+message(STATUS "  Tests:         ${AXION_BUILD_TESTS}")
+message(STATUS "  Benchmarks:    ${AXION_BUILD_BENCHMARKS}")
+message(STATUS "  Examples:      ${AXION_BUILD_EXAMPLES}")
+message(STATUS "")
+</file>
+
+<file path="README.md">
+# Axion ⚛️
+
+> A pure C++ deep learning framework built from scratch.
+
+Axion is a modular deep learning framework written entirely in C++17.
+It follows a layered architecture inspired by PyTorch's internal design,
+where each layer builds on the one below it — from raw hardware abstraction
+all the way up to a user-friendly neural network API.
+
+**Zero Python. Pure C++.**
+
+---
+
+## Architecture
+
+The framework is organized as a strict dependency stack:
+
+```
+┌─────────────────────────────────────────┐
+│            axion/  (Layer 4)            │  User-facing API
+│         nn · optim · data               │  What you #include to train models
+├─────────────────────────────────────────┤
+│          autograd/  (Layer 3)           │  Automatic differentiation
+│       engine · functions                │  Builds & evaluates the grad graph
+├─────────────────────────────────────────┤
+│            aten/  (Layer 2)             │  Tensor library
+│      core · ops · native/cpu · cuda     │  Tensor storage + math kernels
+├─────────────────────────────────────────┤
+│            c10/  (Layer 1)              │  Core runtime
+│    core · util · macros                 │  Device, types, allocator, threading
+└─────────────────────────────────────────┘
+              ▼  hardware  ▼
+```
+
+**Dependency rule:** each layer may only depend on layers *below* it. `axion/` depends
+on `autograd/`, which depends on `aten/`, which depends on `c10/`. Nothing goes upward.
+
+---
+
+## Directory Structure
+
+```
+Axion/
+│
+├── c10/                    # Layer 1: Core runtime library
+│   ├── core/               #   Device, DeviceType, ScalarType, Allocator,
+│   │                       #   Storage, TensorOptions, DispatchKey
+│   ├── util/               #   SmallVector, intrusive_ptr, ArrayRef,
+│   │                       #   Logging, Exception helpers
+│   ├── macros/             #   Export macros, platform detection
+│   └── test/               #   Unit tests for c10
+│
+├── aten/                   # Layer 2: Tensor library ("A Tensor")
+│   ├── core/               #   Tensor, TensorImpl, TensorAccessor
+│   ├── ops/                #   Op registration & dispatch tables
+│   ├── native/             #   Actual math kernel implementations
+│   │   ├── cpu/            #     CPU kernels (add, matmul, conv, relu, etc.)
+│   │   └── cuda/           #     CUDA kernels (same ops, GPU versions)
+│   └── test/               #   Unit tests for aten
+│
+├── autograd/               # Layer 3: Automatic differentiation
+│   ├── engine/             #   Backward engine, topological sort, graph exec
+│   ├── functions/          #   Backward functions (AddBackward, MulBackward, etc.)
+│   └── test/               #   Unit tests for autograd
+│
+├── axion/                  # Layer 4: User-facing C++ API
+│   ├── nn/                 #   Module, Linear, Conv2d, ReLU, Sequential, loss fns
+│   ├── optim/              #   SGD, Adam, LR schedulers
+│   ├── data/               #   Dataset, DataLoader, Sampler, transforms
+│   ├── serialize/          #   Model save/load (checkpointing)
+│   └── test/               #   Unit tests for axion API
+│
+├── test/                   # Integration & cross-layer tests
+│   ├── c10/
+│   ├── aten/
+│   ├── autograd/
+│   └── axion/
+│
+├── examples/               # Example programs showing the API in action
+├── benchmarks/             # Performance benchmarks
+├── tools/                  # Build scripts, code generators, CI helpers
+├── third_party/            # External dependencies (googletest, etc.)
+├── docs/                   # Documentation
+│
+├── CMakeLists.txt          # Root build file (builds layers bottom-up)
+├── .clang-format           # Code style config
+└── .gitignore
+```
+
+---
+
+## Layer Details
+
+### Layer 1 — `c10/` (Core Ten)
+The foundation everything else is built on. Defines the vocabulary types
+that the rest of the framework speaks:
+
+| Component | What it does |
+|-----------|-------------|
+| `Device` / `DeviceType` | Abstraction over CPU, CUDA, etc. |
+| `ScalarType` | Enum of numeric types (Float32, Int64, etc.) |
+| `Allocator` | Interface for memory allocation per device |
+| `Storage` | Ref-counted raw memory buffer |
+| `TensorOptions` | Bundle of (dtype, device, layout) for tensor creation |
+| `DispatchKey` | Tags for routing ops to the right kernel |
+
+### Layer 2 — `aten/` (A Tensor Library)
+The tensor math engine. Owns `Tensor` and all the operations on it:
+
+| Component | What it does |
+|-----------|-------------|
+| `TensorImpl` | The actual data structure behind `Tensor` (metadata + Storage) |
+| `Tensor` | Thin, copyable handle wrapping `TensorImpl` via intrusive_ptr |
+| `ops/` | Operator dispatch tables — maps `(op, dispatch_key) → kernel` |
+| `native/cpu/` | CPU kernel implementations (loops, vectorized math) |
+| `native/cuda/` | GPU kernel implementations (CUDA kernels) |
+
+### Layer 3 — `autograd/`
+Reverse-mode automatic differentiation bolted on top of `aten/`:
+
+| Component | What it does |
+|-----------|-------------|
+| `engine/` | Runs backward pass — topological sort of the computation graph |
+| `functions/` | One class per differentiable op, defining `backward()` for each |
+
+### Layer 4 — `axion/` (User API)
+The friendly face of the framework — what users actually `#include`:
+
+| Component | What it does |
+|-----------|-------------|
+| `nn/` | Neural network modules (`Module`, `Linear`, `Conv2d`, `ReLU`, losses) |
+| `optim/` | Optimizers (`SGD`, `Adam`) and learning rate schedulers |
+| `data/` | `Dataset` / `DataLoader` for batched data loading |
+| `serialize/` | Model checkpointing (save & load) |
+
+---
+
+## Build
+
+```bash
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
+```
+
+---
+
+## Design Principles
+
+1. **Strict layering** — no upward dependencies, each layer is testable in isolation
+2. **Value semantics** — `Tensor` is a lightweight handle (like `shared_ptr`)
+3. **Dispatch-based extensibility** — new backends (e.g. Metal, XLA) plug in via `DispatchKey`
+4. **No Python** — this is a pure C++ framework, end to end
+5. **Modern C++17** — `std::optional`, `std::variant`, structured bindings, constexpr
+</file>
+
+<file path="c10/macros/Macros.h">
+#pragma once
+
+// ============================================================================
+// Axion / c10 — Platform & Export Macros
+// ============================================================================
+//
+// These macros handle:
+//   1. DLL export/import on Windows (dllexport / dllimport)
+//   2. Symbol visibility on Unix (__attribute__((visibility("default"))))
+//   3. Convenience annotations used throughout the c10 library
+//
+// Usage:
+//   class C10_API MyClass { ... };
+//   C10_API void myFunction();
+
+// ---------------------------------------------------------------------------
+// Platform detection
+// ---------------------------------------------------------------------------
+#if defined(_WIN32) || defined(_WIN64)
+#define C10_PLATFORM_WINDOWS
+#elif defined(__APPLE__)
+#define C10_PLATFORM_APPLE
+#elif defined(__linux__)
+#define C10_PLATFORM_LINUX
+#endif
+
+// ---------------------------------------------------------------------------
+// Compiler detection
+// ---------------------------------------------------------------------------
+#if defined(__clang__)
+#define C10_COMPILER_CLANG
+#elif defined(__GNUC__)
+#define C10_COMPILER_GCC
+#elif defined(_MSC_VER)
+#define C10_COMPILER_MSVC
+#endif
+
+// ---------------------------------------------------------------------------
+// Export / import
+// ---------------------------------------------------------------------------
+#ifdef C10_PLATFORM_WINDOWS
+#ifdef C10_BUILD_SHARED_LIBS
+#ifdef C10_BUILD_MAIN_LIB
+#define C10_EXPORT __declspec(dllexport)
+#else
+#define C10_EXPORT __declspec(dllimport)
+#endif
+#else
+#define C10_EXPORT
+#endif
+#define C10_HIDDEN
+#else  // Unix / macOS
+#define C10_EXPORT __attribute__((visibility("default")))
+#define C10_HIDDEN __attribute__((visibility("hidden")))
+#endif
+
+// Convenience alias — every public c10 symbol is tagged with this.
+#define C10_API C10_EXPORT
+
+// ---------------------------------------------------------------------------
+// Utility macros
+// ---------------------------------------------------------------------------
+
+// Suppress unused-variable warnings.
+#if defined(C10_COMPILER_GCC) || defined(C10_COMPILER_CLANG)
+#define C10_UNUSED __attribute__((unused))
+#elif defined(C10_COMPILER_MSVC)
+#define C10_UNUSED __pragma(warning(suppress : 4100 4101))
+#else
+#define C10_UNUSED
+#endif
+
+// Hint to the compiler that a branch is likely/unlikely.
+#if defined(C10_COMPILER_GCC) || defined(C10_COMPILER_CLANG)
+#define C10_LIKELY(x) __builtin_expect(!!(x), 1)
+#define C10_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#define C10_LIKELY(x) (x)
+#define C10_UNLIKELY(x) (x)
+#endif
+
+// Mark a class as non-copyable.
+#define C10_DISABLE_COPY(Class) \
+  Class(const Class&) = delete;  \
+  Class& operator=(const Class&) = delete
+
+// Mark a class as non-copyable and non-movable.
+#define C10_DISABLE_COPY_AND_MOVE(Class) \
+  C10_DISABLE_COPY(Class);               \
+  Class(Class&&) = delete;               \
+  Class& operator=(Class&&) = delete
+</file>
+
+<file path="c10/util/intrusive_ptr.h">
+#pragma once
+
+// ============================================================================
+// Axion / c10 — intrusive_ptr<T>
+// ============================================================================
+//
+// An intrusive reference-counting smart pointer, modeled after PyTorch's c10.
+//
+// KEY DESIGN DECISIONS
+// --------------------
+//  1. The reference count lives *inside* the managed object (intrusive_ptr_target),
+//     not in a separate control block.  This gives:
+//       • One fewer heap allocation per object (vs. std::shared_ptr).
+//       • Cache-friendly access — the count is on the same cache line as the data.
+//       • Ability to obtain an intrusive_ptr from a raw `this` pointer.
+//
+//  2. Two counts are maintained:
+//       • refcount_  — strong references (owners).
+//       • weakcount_ — weak references (observers that don't prevent destruction).
+//     weakcount_ includes a +1 bias while any strong ref exists, mirroring the
+//     weak_ptr / shared_ptr protocol.  The raw storage is freed when weakcount_
+//     drops to zero.
+//
+//  3. Atomic operations use:
+//       • memory_order_acq_rel  for decrements (release on the store, acquire on
+//         the load that sees zero — ensures all preceding writes are visible to
+//         the thread that destroys the object).
+//       • memory_order_relaxed  for increments (we already hold a live reference,
+//         so no synchronization is needed).
+//
+//  4. make_intrusive<T>(args...) is the canonical factory.
+
+#include <atomic>
+#include <cassert>
+#include <cstddef>
+#include <type_traits>
+#include <utility>
+
+#include "c10/macros/Macros.h"
+
+namespace c10 {
+
+namespace detail {
+
+// Internal tag for constructing an intrusive_ptr that adopts an already-
+// incremented reference (used by the weak_intrusive_ptr::lock() path).
+struct DontIncreaseRefcount {};
+
+}  // namespace detail
+
+// ============================================================================
+// intrusive_ptr_target — the ref-counted base class
+// ============================================================================
+//
+// Any class managed by intrusive_ptr<T> must inherit from this.
+//
+// Example:
+//   class MyObject : public c10::intrusive_ptr_target {
+//   public:
+//     int value;
+//   };
+//
+//   auto p = c10::make_intrusive<MyObject>();
+
+class C10_API intrusive_ptr_target {
+ public:
+  // Allow polymorphic deletion through base pointer.
+  virtual ~intrusive_ptr_target() = default;
+
+  // The ref count starts at 0.  The first intrusive_ptr to adopt this object
+  // will bump it to 1.
+  intrusive_ptr_target() noexcept : refcount_(0), weakcount_(0) {}
+
+  // Move and copy are allowed — they leave the reference counts untouched
+  // because the counts belong to the *identity* of the object, not its value.
+  intrusive_ptr_target(intrusive_ptr_target&& /*other*/) noexcept
+      : refcount_(0), weakcount_(0) {}
+
+  intrusive_ptr_target& operator=(intrusive_ptr_target&& /*other*/) noexcept {
+    // Intentionally do NOT touch refcount_ / weakcount_.
+    return *this;
+  }
+
+  intrusive_ptr_target(const intrusive_ptr_target& /*other*/) noexcept
+      : refcount_(0), weakcount_(0) {}
+
+  intrusive_ptr_target& operator=(
+      const intrusive_ptr_target& /*other*/) noexcept {
+    // Intentionally do NOT touch refcount_ / weakcount_.
+    return *this;
+  }
+
+ private:
+  // Allow the smart-pointer classes to reach the counts directly.
+  template <typename T>
+  friend class intrusive_ptr;
+  template <typename T>
+  friend class weak_intrusive_ptr;
+
+  mutable std::atomic<size_t> refcount_;
+  mutable std::atomic<size_t> weakcount_;
+
+  // True once the destructor has been called (strong refcount hit 0).
+  // Storage stays alive while weakcount_ > 0 even after destruction.
+  mutable bool destroyed_ = false;
+};
+
+// Forward declaration — needed so intrusive_ptr can friend it.
+template <typename T>
+class weak_intrusive_ptr;
+
+// ============================================================================
+// intrusive_ptr<T> — strong-owning smart pointer
+// ============================================================================
+
+template <typename TTarget>
+class intrusive_ptr final {
+ public:
+  // ------------------------------------------------------------------
+  // Type requirements
+  // ------------------------------------------------------------------
+  static_assert(
+      std::is_base_of<intrusive_ptr_target, TTarget>::value,
+      "intrusive_ptr<T> requires T to derive from intrusive_ptr_target");
+
+  using element_type = TTarget;
+
+  // ------------------------------------------------------------------
+  // Constructors
+  // ------------------------------------------------------------------
+
+  // Default — null pointer.
+  intrusive_ptr() noexcept : target_(nullptr) {}
+
+  // Adopt a raw pointer.  The caller is transferring ownership of one
+  // strong reference to us, so we increment the refcount.
+  explicit intrusive_ptr(TTarget* target) noexcept : target_(target) {
+    if (target_) {
+      retain_();
+    }
+  }
+
+  // Copy — adds a strong reference.
+  intrusive_ptr(const intrusive_ptr& rhs) noexcept : target_(rhs.target_) {
+    if (target_) {
+      retain_();
+    }
+  }
+
+  // Generalized copy for derived types.
+  template <
+      typename From,
+      typename = std::enable_if_t<std::is_convertible<From*, TTarget*>::value>>
+  intrusive_ptr(const intrusive_ptr<From>& rhs) noexcept
+      : target_(rhs.target_) {
+    if (target_) {
+      retain_();
+    }
+  }
+
+  // Move — pilfer the pointer; no refcount change.
+  intrusive_ptr(intrusive_ptr&& rhs) noexcept : target_(rhs.target_) {
+    rhs.target_ = nullptr;
+  }
+
+  // Generalized move for derived types.
+  template <
+      typename From,
+      typename = std::enable_if_t<std::is_convertible<From*, TTarget*>::value>>
+  intrusive_ptr(intrusive_ptr<From>&& rhs) noexcept : target_(rhs.target_) {
+    rhs.target_ = nullptr;
+  }
+
+  // ------------------------------------------------------------------
+  // Destructor
+  // ------------------------------------------------------------------
+  ~intrusive_ptr() noexcept { release_(); }
+
+  // ------------------------------------------------------------------
+  // Assignment
+  // ------------------------------------------------------------------
+
+  intrusive_ptr& operator=(const intrusive_ptr& rhs) noexcept {
+    if (this != &rhs) {
+      release_();
+      target_ = rhs.target_;
+      if (target_) {
+        retain_();
+      }
+    }
+    return *this;
+  }
+
+  intrusive_ptr& operator=(intrusive_ptr&& rhs) noexcept {
+    if (this != &rhs) {
+      release_();
+      target_ = rhs.target_;
+      rhs.target_ = nullptr;
+    }
+    return *this;
+  }
+
+  // ------------------------------------------------------------------
+  // Observers
+  // ------------------------------------------------------------------
+
+  TTarget* get() const noexcept { return target_; }
+
+  TTarget& operator*() const noexcept {
+    assert(target_ && "dereferencing a null intrusive_ptr");
+    return *target_;
+  }
+
+  TTarget* operator->() const noexcept {
+    assert(target_ && "dereferencing a null intrusive_ptr");
+    return target_;
+  }
+
+  explicit operator bool() const noexcept { return target_ != nullptr; }
+
+  /// Returns the current strong reference count.  Useful for debugging
+  /// and tests; do NOT base correctness decisions on this in production.
+  size_t use_count() const noexcept {
+    if (!target_) {
+      return 0;
+    }
+    return target_->refcount_.load(std::memory_order_acquire);
+  }
+
+  /// True when this is the sole owner of the pointee.
+  bool unique() const noexcept { return use_count() == 1; }
+
+  // ------------------------------------------------------------------
+  // Modifiers
+  // ------------------------------------------------------------------
+
+  /// Release ownership and return the raw pointer WITHOUT decrementing
+  /// the reference count.  The caller now owns that one strong reference
+  /// and is responsible for eventually calling reclaim() or manually
+  /// managing the lifetime.
+  ///
+  /// WARNING: Do NOT pass the returned pointer to the normal constructor
+  /// — that would double-increment the refcount.  Use reclaim() instead.
+  TTarget* release() noexcept {
+    TTarget* tmp = target_;
+    target_ = nullptr;
+    return tmp;
+  }
+
+  /// Adopt a raw pointer that already has its refcount incremented
+  /// (e.g., obtained from release()).  Does NOT increment the refcount.
+  ///
+  ///   auto* raw = ptr.release();
+  ///   /* ... */
+  ///   auto ptr2 = intrusive_ptr<T>::reclaim(raw);  // takes ownership
+  ///
+  static intrusive_ptr reclaim(TTarget* target) noexcept {
+    return intrusive_ptr(target, detail::DontIncreaseRefcount{});
+  }
+
+  /// Replace the managed object.
+  void reset() noexcept {
+    release_();
+    target_ = nullptr;
+  }
+
+  void reset(TTarget* target) noexcept {
+    release_();
+    target_ = target;
+    if (target_) {
+      retain_();
+    }
+  }
+
+  void swap(intrusive_ptr& rhs) noexcept {
+    TTarget* tmp = target_;
+    target_ = rhs.target_;
+    rhs.target_ = tmp;
+  }
+
+  // ------------------------------------------------------------------
+  // Comparisons
+  // ------------------------------------------------------------------
+
+  bool operator==(const intrusive_ptr& rhs) const noexcept {
+    return target_ == rhs.target_;
+  }
+  bool operator!=(const intrusive_ptr& rhs) const noexcept {
+    return target_ != rhs.target_;
+  }
+  bool operator==(std::nullptr_t) const noexcept {
+    return target_ == nullptr;
+  }
+  bool operator!=(std::nullptr_t) const noexcept {
+    return target_ != nullptr;
+  }
+
+ private:
+  // Allow other intrusive_ptr instantiations (for generalized copy/move).
+  template <typename U>
+  friend class intrusive_ptr;
+
+  // Allow weak_intrusive_ptr::lock() to construct without incrementing.
+  template <typename U>
+  friend class weak_intrusive_ptr;
+
+  // Private constructor used by weak_intrusive_ptr::lock().  The refcount
+  // has already been incremented by the caller via compare_exchange.
+  explicit intrusive_ptr(TTarget* target, detail::DontIncreaseRefcount) noexcept
+      : target_(target) {}
+
+  void retain_() const noexcept {
+    // We already hold a live reference, so no ordering is needed.
+    target_->refcount_.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  void release_() noexcept {
+    if (!target_) {
+      return;
+    }
+    // acq_rel: the release ensures all our writes are visible to the
+    // thread that sees the count drop to zero; the acquire on that
+    // thread ensures it sees them before running the destructor.
+    if (target_->refcount_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+      // We were the last strong owner.  Call the destructor.
+      auto* ptr = target_;
+      ptr->destroyed_ = true;
+      ptr->~TTarget();
+      // Free storage only if no weak references are keeping it alive.
+      if (ptr->weakcount_.load(std::memory_order_acquire) == 0) {
+        ::operator delete(static_cast<void*>(ptr));
+      }
+    }
+    target_ = nullptr;
+  }
+
+  TTarget* target_;
+};
+
+// ============================================================================
+// weak_intrusive_ptr<T> — non-owning observer
+// ============================================================================
+
+template <typename TTarget>
+class weak_intrusive_ptr final {
+ public:
+  static_assert(
+      std::is_base_of<intrusive_ptr_target, TTarget>::value,
+      "weak_intrusive_ptr<T> requires T to derive from intrusive_ptr_target");
+
+  // Default — null.
+  weak_intrusive_ptr() noexcept : target_(nullptr) {}
+
+  // Construct from a strong pointer — adds a weak reference.
+  explicit weak_intrusive_ptr(const intrusive_ptr<TTarget>& ptr) noexcept
+      : target_(ptr.get()) {
+    if (target_) {
+      target_->weakcount_.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  // Copy.
+  weak_intrusive_ptr(const weak_intrusive_ptr& rhs) noexcept
+      : target_(rhs.target_) {
+    if (target_) {
+      target_->weakcount_.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  // Move.
+  weak_intrusive_ptr(weak_intrusive_ptr&& rhs) noexcept
+      : target_(rhs.target_) {
+    rhs.target_ = nullptr;
+  }
+
+  ~weak_intrusive_ptr() noexcept { release_weak_(); }
+
+  // Assignment.
+  weak_intrusive_ptr& operator=(const weak_intrusive_ptr& rhs) noexcept {
+    if (this != &rhs) {
+      release_weak_();
+      target_ = rhs.target_;
+      if (target_) {
+        target_->weakcount_.fetch_add(1, std::memory_order_relaxed);
+      }
+    }
+    return *this;
+  }
+
+  weak_intrusive_ptr& operator=(weak_intrusive_ptr&& rhs) noexcept {
+    if (this != &rhs) {
+      release_weak_();
+      target_ = rhs.target_;
+      rhs.target_ = nullptr;
+    }
+    return *this;
+  }
+
+  /// Attempt to promote to a strong reference.
+  /// Returns a null intrusive_ptr if the object has already been destroyed.
+  intrusive_ptr<TTarget> lock() const noexcept {
+    if (!target_) {
+      return intrusive_ptr<TTarget>();
+    }
+    // CAS loop: try to increment refcount only if it is > 0.
+    size_t cur = target_->refcount_.load(std::memory_order_relaxed);
+    while (cur != 0) {
+      if (target_->refcount_.compare_exchange_weak(
+              cur, cur + 1, std::memory_order_acq_rel,
+              std::memory_order_relaxed)) {
+        // Successfully promoted.
+        return intrusive_ptr<TTarget>(
+            target_, detail::DontIncreaseRefcount{});
+      }
+      // cur was updated by compare_exchange_weak on failure; retry.
+    }
+    return intrusive_ptr<TTarget>();
+  }
+
+  /// Number of strong references.  0 means the object is dead.
+  size_t use_count() const noexcept {
+    if (!target_) {
+      return 0;
+    }
+    return target_->refcount_.load(std::memory_order_acquire);
+  }
+
+  bool expired() const noexcept { return use_count() == 0; }
+
+ private:
+  void release_weak_() noexcept {
+    if (!target_) {
+      return;
+    }
+    auto* ptr = target_;
+    target_ = nullptr;
+    // If this was the last weak ref AND the object was already destroyed
+    // by the strong side, we must free the storage.
+    if (ptr->weakcount_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+      if (ptr->destroyed_) {
+        ::operator delete(static_cast<void*>(ptr));
+      }
+    }
+  }
+
+  TTarget* target_;
+};
+
+// ============================================================================
+// make_intrusive<T>(args...) — canonical factory
+// ============================================================================
+
+/// Constructs an object of type T and wraps it in an intrusive_ptr.
+/// This is the preferred way to create intrusive-counted objects.
+///
+///   auto obj = c10::make_intrusive<MyObject>(arg1, arg2);
+///
+template <typename T, typename... Args>
+intrusive_ptr<T> make_intrusive(Args&&... args) {
+  return intrusive_ptr<T>(new T(std::forward<Args>(args)...));
+}
+
+// ============================================================================
+// Free-standing swap
+// ============================================================================
+
+template <typename T>
+void swap(intrusive_ptr<T>& lhs, intrusive_ptr<T>& rhs) noexcept {
+  lhs.swap(rhs);
+}
+
+}  // namespace c10
+</file>
+
+<file path="test/c10/intrusive_ptr_test.cpp">
+// ============================================================================
+// Tests for c10::intrusive_ptr<T>
+// ============================================================================
+
+#include <gtest/gtest.h>
+
+#include <thread>
+#include <vector>
+
+#include "c10/util/intrusive_ptr.h"
+
+// ---------------------------------------------------------------------------
+// Test target class
+// ---------------------------------------------------------------------------
+
+namespace {
+
+class TestObject : public c10::intrusive_ptr_target {
+ public:
+  explicit TestObject(int v = 0) : value(v) {}
+  int value;
+};
+
+// A derived class — tests polymorphic conversions.
+class DerivedObject : public TestObject {
+ public:
+  explicit DerivedObject(int v, float extra)
+      : TestObject(v), extra_data(extra) {}
+  float extra_data;
+};
+
+// An object that sets a flag on destruction — tests lifetime correctness.
+class DestTracker : public c10::intrusive_ptr_target {
+ public:
+  explicit DestTracker(bool* flag) : destroyed(flag) { *destroyed = false; }
+  ~DestTracker() override { *destroyed = true; }
+  bool* destroyed;
+};
+
+}  // namespace
+
+// ============================================================================
+// Basic semantics
+// ============================================================================
+
+TEST(IntrusivePtr, DefaultConstructorIsNull) {
+  c10::intrusive_ptr<TestObject> p;
+  EXPECT_EQ(p.get(), nullptr);
+  EXPECT_FALSE(static_cast<bool>(p));
+  EXPECT_EQ(p.use_count(), 0u);
+}
+
+TEST(IntrusivePtr, MakeIntrusive) {
+  auto p = c10::make_intrusive<TestObject>(42);
+  ASSERT_NE(p.get(), nullptr);
+  EXPECT_EQ(p->value, 42);
+  EXPECT_EQ(p.use_count(), 1u);
+  EXPECT_TRUE(p.unique());
+}
+
+TEST(IntrusivePtr, ExplicitRawPointer) {
+  auto* raw = new TestObject(7);
+  c10::intrusive_ptr<TestObject> p(raw);
+  EXPECT_EQ(p.get(), raw);
+  EXPECT_EQ(p->value, 7);
+  EXPECT_EQ(p.use_count(), 1u);
+}
+
+// ============================================================================
+// Copy semantics
+// ============================================================================
+
+TEST(IntrusivePtr, CopyIncrementsRefcount) {
+  auto p1 = c10::make_intrusive<TestObject>(10);
+  EXPECT_EQ(p1.use_count(), 1u);
+
+  auto p2 = p1;  // copy
+  EXPECT_EQ(p1.use_count(), 2u);
+  EXPECT_EQ(p2.use_count(), 2u);
+  EXPECT_EQ(p1.get(), p2.get());
+}
+
+TEST(IntrusivePtr, CopyAssignment) {
+  auto p1 = c10::make_intrusive<TestObject>(1);
+  auto p2 = c10::make_intrusive<TestObject>(2);
+
+  TestObject* old_p2 = p2.get();
+  p2 = p1;
+
+  EXPECT_EQ(p1.use_count(), 2u);
+  EXPECT_EQ(p2.get(), p1.get());
+  // old_p2 object should have been destroyed (use_count was 1, now 0).
+}
+
+TEST(IntrusivePtr, SelfAssignmentIsSafe) {
+  auto p = c10::make_intrusive<TestObject>(99);
+  p = p;  // self-assign
+  EXPECT_EQ(p.use_count(), 1u);
+  EXPECT_EQ(p->value, 99);
+}
+
+// ============================================================================
+// Move semantics
+// ============================================================================
+
+TEST(IntrusivePtr, MoveLeaveSourceNull) {
+  auto p1 = c10::make_intrusive<TestObject>(5);
+  auto* raw = p1.get();
+
+  auto p2 = std::move(p1);
+  EXPECT_EQ(p1.get(), nullptr);  // NOLINT: intentional use-after-move
+  EXPECT_EQ(p2.get(), raw);
+  EXPECT_EQ(p2.use_count(), 1u);
+}
+
+TEST(IntrusivePtr, MoveAssignment) {
+  auto p1 = c10::make_intrusive<TestObject>(1);
+  auto p2 = c10::make_intrusive<TestObject>(2);
+
+  p2 = std::move(p1);
+  EXPECT_EQ(p1.get(), nullptr);  // NOLINT
+  EXPECT_EQ(p2->value, 1);
+  EXPECT_EQ(p2.use_count(), 1u);
+}
+
+// ============================================================================
+// Lifetime / destructor tracking
+// ============================================================================
+
+TEST(IntrusivePtr, DestructorCalledWhenLastRefDies) {
+  bool destroyed = false;
+  {
+    auto p = c10::make_intrusive<DestTracker>(&destroyed);
+    EXPECT_FALSE(destroyed);
+    EXPECT_EQ(p.use_count(), 1u);
+  }  // p goes out of scope
+  EXPECT_TRUE(destroyed);
+}
+
+TEST(IntrusivePtr, DestructorNotCalledWhileRefsRemain) {
+  bool destroyed = false;
+  auto p1 = c10::make_intrusive<DestTracker>(&destroyed);
+  {
+    auto p2 = p1;  // copy
+    EXPECT_EQ(p1.use_count(), 2u);
+  }  // p2 dies — refcount drops to 1
+  EXPECT_FALSE(destroyed);
+  EXPECT_EQ(p1.use_count(), 1u);
+}
+
+// ============================================================================
+// reset / release / swap
+// ============================================================================
+
+TEST(IntrusivePtr, Reset) {
+  bool destroyed = false;
+  auto p = c10::make_intrusive<DestTracker>(&destroyed);
+  p.reset();
+  EXPECT_TRUE(destroyed);
+  EXPECT_EQ(p.get(), nullptr);
+}
+
+TEST(IntrusivePtr, ResetWithNewTarget) {
+  bool d1 = false, d2 = false;
+  auto p = c10::make_intrusive<DestTracker>(&d1);
+  auto* raw2 = new DestTracker(&d2);
+
+  p.reset(raw2);
+  EXPECT_TRUE(d1);    // old object destroyed
+  EXPECT_FALSE(d2);   // new object alive
+  EXPECT_EQ(p.get(), raw2);
+}
+
+TEST(IntrusivePtr, Release) {
+  auto p = c10::make_intrusive<TestObject>(42);
+  auto* raw = p.release();
+  EXPECT_EQ(p.get(), nullptr);
+  EXPECT_EQ(raw->value, 42);
+  // release() transfers the existing strong ref to the caller.
+  // Use reclaim() to re-wrap without double-incrementing.
+  auto cleanup = c10::intrusive_ptr<TestObject>::reclaim(raw);
+  EXPECT_EQ(cleanup.use_count(), 1u);
+  // cleanup's destructor will destroy + free it.
+}
+
+TEST(IntrusivePtr, Reclaim) {
+  bool destroyed = false;
+  auto p = c10::make_intrusive<DestTracker>(&destroyed);
+  EXPECT_EQ(p.use_count(), 1u);
+
+  auto* raw = p.release();
+  EXPECT_EQ(p.get(), nullptr);
+  EXPECT_FALSE(destroyed);
+
+  // reclaim() adopts the existing ref — no increment.
+  auto p2 = c10::intrusive_ptr<DestTracker>::reclaim(raw);
+  EXPECT_EQ(p2.use_count(), 1u);
+  EXPECT_FALSE(destroyed);
+
+  p2.reset();
+  EXPECT_TRUE(destroyed);
+}
+
+TEST(IntrusivePtr, Swap) {
+  auto p1 = c10::make_intrusive<TestObject>(1);
+  auto p2 = c10::make_intrusive<TestObject>(2);
+  auto* raw1 = p1.get();
+  auto* raw2 = p2.get();
+
+  p1.swap(p2);
+  EXPECT_EQ(p1.get(), raw2);
+  EXPECT_EQ(p2.get(), raw1);
+}
+
+TEST(IntrusivePtr, FreeStandingSwap) {
+  auto p1 = c10::make_intrusive<TestObject>(10);
+  auto p2 = c10::make_intrusive<TestObject>(20);
+  auto* raw1 = p1.get();
+  auto* raw2 = p2.get();
+
+  swap(p1, p2);  // ADL
+  EXPECT_EQ(p1.get(), raw2);
+  EXPECT_EQ(p2.get(), raw1);
+}
+
+// ============================================================================
+// Comparisons
+// ============================================================================
+
+TEST(IntrusivePtr, EqualityComparison) {
+  auto p1 = c10::make_intrusive<TestObject>(1);
+  auto p2 = p1;
+  auto p3 = c10::make_intrusive<TestObject>(1);
+
+  EXPECT_EQ(p1, p2);     // same object
+  EXPECT_NE(p1, p3);     // different objects (even if same value)
+}
+
+TEST(IntrusivePtr, NullptrComparison) {
+  c10::intrusive_ptr<TestObject> null;
+  auto live = c10::make_intrusive<TestObject>(0);
+
+  EXPECT_EQ(null, nullptr);
+  EXPECT_NE(live, nullptr);
+}
+
+// ============================================================================
+// Polymorphic (derived → base) conversions
+// ============================================================================
+
+TEST(IntrusivePtr, DerivedToBaseCopy) {
+  auto derived = c10::make_intrusive<DerivedObject>(5, 3.14f);
+  c10::intrusive_ptr<TestObject> base = derived;  // generalized copy
+
+  EXPECT_EQ(base.use_count(), 2u);
+  EXPECT_EQ(base->value, 5);
+}
+
+TEST(IntrusivePtr, DerivedToBaseMove) {
+  auto derived = c10::make_intrusive<DerivedObject>(7, 2.71f);
+  c10::intrusive_ptr<TestObject> base = std::move(derived);  // generalized move
+
+  EXPECT_EQ(derived.get(), nullptr);  // NOLINT
+  EXPECT_EQ(base.use_count(), 1u);
+  EXPECT_EQ(base->value, 7);
+}
+
+// ============================================================================
+// weak_intrusive_ptr basics
+// ============================================================================
+
+TEST(WeakIntrusivePtr, DefaultIsExpired) {
+  c10::weak_intrusive_ptr<TestObject> w;
+  EXPECT_TRUE(w.expired());
+  EXPECT_EQ(w.use_count(), 0u);
+  auto locked = w.lock();
+  EXPECT_EQ(locked.get(), nullptr);
+}
+
+TEST(WeakIntrusivePtr, LockSucceedsWhileStrongExists) {
+  auto strong = c10::make_intrusive<TestObject>(100);
+  c10::weak_intrusive_ptr<TestObject> weak(strong);
+
+  EXPECT_FALSE(weak.expired());
+  EXPECT_EQ(weak.use_count(), 1u);
+
+  auto promoted = weak.lock();
+  ASSERT_NE(promoted.get(), nullptr);
+  EXPECT_EQ(promoted->value, 100);
+  EXPECT_EQ(strong.use_count(), 2u);  // strong + promoted
+}
+
+TEST(WeakIntrusivePtr, LockFailsAfterStrongDies) {
+  c10::weak_intrusive_ptr<TestObject> weak;
+  {
+    auto strong = c10::make_intrusive<TestObject>(42);
+    weak = c10::weak_intrusive_ptr<TestObject>(strong);
+    EXPECT_FALSE(weak.expired());
+  }  // strong dies
+  EXPECT_TRUE(weak.expired());
+  auto promoted = weak.lock();
+  EXPECT_EQ(promoted.get(), nullptr);
+}
+
+TEST(WeakIntrusivePtr, CopySemantics) {
+  auto strong = c10::make_intrusive<TestObject>(1);
+  c10::weak_intrusive_ptr<TestObject> w1(strong);
+  auto w2 = w1;  // copy
+
+  EXPECT_EQ(w1.use_count(), 1u);
+  EXPECT_EQ(w2.use_count(), 1u);
+  EXPECT_FALSE(w1.expired());
+  EXPECT_FALSE(w2.expired());
+}
+
+TEST(WeakIntrusivePtr, MoveSemantics) {
+  auto strong = c10::make_intrusive<TestObject>(2);
+  c10::weak_intrusive_ptr<TestObject> w1(strong);
+  auto w2 = std::move(w1);
+
+  EXPECT_FALSE(w2.expired());
+  // w1 is moved-from — its target_ is null
+}
+
+// ============================================================================
+// Thread safety (basic smoke test)
+// ============================================================================
+
+TEST(IntrusivePtr, ConcurrentCopyAndDestroy) {
+  // Create an object and hammer it with concurrent copies/destroys.
+  auto original = c10::make_intrusive<TestObject>(0);
+  constexpr int kThreads = 8;
+  constexpr int kIters = 10000;
+
+  std::vector<std::thread> threads;
+  threads.reserve(kThreads);
+
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&original]() {
+      for (int i = 0; i < kIters; ++i) {
+        auto copy = original;  // increment
+        EXPECT_GE(copy.use_count(), 2u);
+      }  // decrement
+    });
+  }
+
+  for (auto& th : threads) {
+    th.join();
+  }
+
+  // After all threads complete, only `original` should remain.
+  EXPECT_EQ(original.use_count(), 1u);
+}
+</file>
+
+<file path="test/c10/CMakeLists.txt">
+# ============================================================================
+# c10 tests
+# ============================================================================
+
+add_executable(test_intrusive_ptr intrusive_ptr_test.cpp)
+target_link_libraries(test_intrusive_ptr PRIVATE c10 GTest::gtest_main)
+gtest_discover_tests(test_intrusive_ptr)
+
+add_executable(device_test device_test.cpp)
+target_link_libraries(device_test PRIVATE c10 GTest::gtest_main)
+gtest_discover_tests(device_test)
+
+add_executable(dataptr_test dataptr_test.cpp)
+target_link_libraries(dataptr_test PRIVATE c10 GTest::gtest_main)
+gtest_discover_tests(dataptr_test)
+
+add_executable(allocator_test allocator_test.cpp)
+target_link_libraries(allocator_test PRIVATE c10 GTest::gtest_main)
+gtest_discover_tests(allocator_test)
+
+add_executable(cpu_allocator_test cpu_allocator_test.cpp)
+target_link_libraries(cpu_allocator_test PRIVATE c10 GTest::gtest_main)
+gtest_discover_tests(cpu_allocator_test)
+
+add_executable(storage_impl_test storage_impl_test.cpp)
+target_link_libraries(storage_impl_test PRIVATE c10 GTest::gtest_main)
+gtest_discover_tests(storage_impl_test)
+
+add_executable(storage_test storage_test.cpp)
+target_link_libraries(storage_test PRIVATE c10 GTest::gtest_main)
+gtest_discover_tests(storage_test)
+
+add_executable(tensor_impl_test tensor_impl_test.cpp)
+target_link_libraries(tensor_impl_test PRIVATE c10 GTest::gtest_main)
+gtest_discover_tests(tensor_impl_test)
+
+add_executable(tensor_test tensor_test.cpp)
+target_link_libraries(tensor_test PRIVATE c10 GTest::gtest_main)
+gtest_discover_tests(tensor_test)
+</file>
+
+</files>
