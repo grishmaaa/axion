@@ -29,3 +29,7 @@ gtest_discover_tests(storage_impl_test)
 add_executable(storage_test storage_test.cpp)
 target_link_libraries(storage_test PRIVATE c10 GTest::gtest_main)
 gtest_discover_tests(storage_test)
+
+add_executable(tensor_impl_test tensor_impl_test.cpp)
+target_link_libraries(tensor_impl_test PRIVATE c10 GTest::gtest_main)
+gtest_discover_tests(tensor_impl_test)
