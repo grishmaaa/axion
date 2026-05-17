@@ -3,6 +3,10 @@
 # ============================================================================
 #
 # Now a STATIC library — Ops.cpp provides the first translation unit.
+# Native CPU kernel files use static registration (RegisterKernel) to
+# populate the Dispatcher at init time.  These registrations have no
+# direct symbol references from other TUs, so we must use OBJECT library
+# linkage to prevent the linker from stripping them.
 
 file(GLOB_RECURSE ATEN_SRCS
   "${CMAKE_CURRENT_SOURCE_DIR}/ops/*.cpp"
@@ -10,7 +14,9 @@ file(GLOB_RECURSE ATEN_SRCS
 )
 
 if(ATEN_SRCS)
-  add_library(aten STATIC ${ATEN_SRCS})
+  # OBJECT library ensures all .o files (including static registrars)
+  # are linked into every target that depends on aten.
+  add_library(aten OBJECT ${ATEN_SRCS})
   target_include_directories(aten PUBLIC ${CMAKE_SOURCE_DIR})
   target_link_libraries(aten PUBLIC c10)
   target_compile_features(aten PUBLIC cxx_std_17)

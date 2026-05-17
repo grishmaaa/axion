@@ -37,3 +37,7 @@ gtest_discover_tests(tensor_impl_test)
 add_executable(tensor_test tensor_test.cpp)
 target_link_libraries(tensor_test PRIVATE c10 GTest::gtest_main)
 gtest_discover_tests(tensor_test)
+
+add_executable(dispatch_test dispatch_test.cpp)
+target_link_libraries(dispatch_test PRIVATE aten c10 GTest::gtest_main)
+gtest_discover_tests(dispatch_test)

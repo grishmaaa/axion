@@ -140,6 +140,11 @@ class C10_API Tensor {
   /// Device the data lives on.
   Device device() const noexcept { return impl_->device(); }
 
+  /// The set of dispatch keys for routing this tensor through the dispatcher.
+  DispatchKeySet dispatch_key_set() const noexcept {
+    return impl_->dispatch_key_set();
+  }
+
   /// True if the tensor is contiguous in memory (row-major, no gaps).
   bool is_contiguous() const noexcept { return impl_->is_contiguous(); }
 

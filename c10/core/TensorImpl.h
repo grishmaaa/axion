@@ -4,6 +4,7 @@
 #include <numeric>
 #include <cstdint>
 
+#include "c10/core/DispatchKey.h"
 #include "c10/core/Storage.h"
 #include "c10/core/ScalarType.h"
 #include "c10/util/intrusive_ptr.h"
@@ -55,6 +56,10 @@ class C10_API TensorImpl : public intrusive_ptr_target {
   const Storage& storage() const noexcept { return storage_; }
   Device device() const noexcept { return storage_.device(); }
 
+  /// The dispatch key set for this tensor — used by the Dispatcher
+  /// to route ops to the correct backend kernel.
+  DispatchKeySet dispatch_key_set() const noexcept { return key_set_; }
+
   /**
    * Returns the raw pointer to the data, adjusted for storage_offset.
    */
@@ -95,6 +100,7 @@ class C10_API TensorImpl : public intrusive_ptr_target {
   int64_t storage_offset_;
   int64_t numel_;
   bool is_contiguous_;
+  DispatchKeySet key_set_;
 
   // Future Autograd support. Zero overhead on inference.
   void* autograd_meta_ = nullptr;

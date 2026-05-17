@@ -15,7 +15,9 @@ TensorImpl::TensorImpl(
       dtype_(dtype),
       sizes_(std::move(sizes)),
       strides_(std::move(strides)),
-      storage_offset_(storage_offset) {
+      storage_offset_(storage_offset),
+      key_set_(storage_ ? dispatchKeySetForDevice(storage_.device())
+                        : DispatchKeySet()) {
   refresh_numel();
   refresh_contiguous();
 }
@@ -29,7 +31,9 @@ TensorImpl::TensorImpl(
       dtype_(dtype),
       sizes_(std::move(sizes)),
       strides_(default_strides(sizes_)),
-      storage_offset_(storage_offset) {
+      storage_offset_(storage_offset),
+      key_set_(storage_ ? dispatchKeySetForDevice(storage_.device())
+                        : DispatchKeySet()) {
   refresh_numel();
   refresh_contiguous();
 }

@@ -1,246 +1,260 @@
 // ============================================================================
-// Axion / ATen — Ops implementation
+// Axion / ATen — Ops implementation (dispatch layer)
 // ============================================================================
 //
-// This is the only file in ATen that includes TensorIterator.h.
-// It is also where matmul and sum live in full, since they don't go
-// through TensorIterator (different output shape than input).
+// PUBLIC API → Dispatcher bridge.  Each function validates inputs,
+// computes dispatch key, and calls through the type-erased kernel.
+//
+// Shape ops (transpose, reshape, view) are metadata-only — they
+// create new TensorImpl instances with different sizes/strides but
+// share the same Storage.  These don't go through dispatch.
 
 #include "aten/ops/Ops.h"
 
 #include <cassert>
-#include <random>
+#include <numeric>
 
-#include "aten/core/TensorIterator.h"
-#include "c10/core/CPUAllocator.h"
+#include "c10/core/Dispatcher.h"
 
 namespace aten {
+
+// ============================================================================
+// Dispatch key helpers
+// ============================================================================
+
+namespace {
+
+inline c10::DispatchKey dk(const c10::Tensor& a) {
+  return a.dispatch_key_set().highestPriorityKey();
+}
+
+inline c10::DispatchKey dk(const c10::Tensor& a, const c10::Tensor& b) {
+  return (a.dispatch_key_set() | b.dispatch_key_set()).highestPriorityKey();
+}
+
+template <typename FnPtr>
+FnPtr lookup(const char* name, c10::DispatchKey key) {
+  auto fn = c10::Dispatcher::singleton().lookup(name, key);
+  assert(fn && "No kernel registered");
+  return fn.as<FnPtr>();
+}
+
+}  // namespace
+
+// ============================================================================
+// Type aliases
+// ============================================================================
+
+using UnaryFn   = c10::Tensor (*)(const c10::Tensor&);
+using BinaryFn  = c10::Tensor (*)(const c10::Tensor&, const c10::Tensor&);
+using ScalarFn  = c10::Tensor (*)(const c10::Tensor&, double);
+using ReduceFn  = c10::Tensor (*)(const c10::Tensor&);
+using CreateFn  = c10::Tensor (*)(std::vector<int64_t>, c10::ScalarType);
+using FullFn    = c10::Tensor (*)(std::vector<int64_t>, double, c10::ScalarType);
+using ArangeFn  = c10::Tensor (*)(double, double, double, c10::ScalarType);
+using EyeFn     = c10::Tensor (*)(int64_t, c10::ScalarType);
 
 // ============================================================================
 // Creation ops
 // ============================================================================
 
 c10::Tensor zeros(std::vector<int64_t> sizes, c10::ScalarType dtype) {
-  assert((dtype == c10::ScalarType::Float32 ||
-          dtype == c10::ScalarType::Float64) &&
-         "zeros: unsupported dtype (only Float32/Float64)");
-
-  auto out = c10::Tensor::empty(std::move(sizes), dtype);
-  // CPUAllocator already zero-initializes via std::memset in allocate(),
-  // so out is already filled with zeros.  No extra work needed.
-  return out;
+  return lookup<CreateFn>("aten::zeros", c10::DispatchKey::CPU)(
+      std::move(sizes), dtype);
 }
 
 c10::Tensor ones(std::vector<int64_t> sizes, c10::ScalarType dtype) {
-  return full(std::move(sizes), 1.0, dtype);
+  return lookup<CreateFn>("aten::ones", c10::DispatchKey::CPU)(
+      std::move(sizes), dtype);
 }
 
-c10::Tensor full(std::vector<int64_t> sizes, double value, c10::ScalarType dtype) {
-  assert((dtype == c10::ScalarType::Float32 ||
-          dtype == c10::ScalarType::Float64) &&
-         "full: unsupported dtype (only Float32/Float64)");
-
-  auto out = c10::Tensor::empty(std::move(sizes), dtype);
-  int64_t n = out.numel();
-
-  switch (dtype) {
-    case c10::ScalarType::Float32: {
-      float val = static_cast<float>(value);
-      float* p = out.data_ptr<float>();
-      for (int64_t i = 0; i < n; ++i) p[i] = val;
-      break;
-    }
-    case c10::ScalarType::Float64: {
-      double* p = out.data_ptr<double>();
-      for (int64_t i = 0; i < n; ++i) p[i] = value;
-      break;
-    }
-    default:
-      assert(false && "full: unreachable");
-  }
-
-  return out;
+c10::Tensor full(
+    std::vector<int64_t> sizes, double value, c10::ScalarType dtype) {
+  return lookup<FullFn>("aten::full", c10::DispatchKey::CPU)(
+      std::move(sizes), value, dtype);
 }
 
 c10::Tensor rand(std::vector<int64_t> sizes, c10::ScalarType dtype) {
-  assert((dtype == c10::ScalarType::Float32 ||
-          dtype == c10::ScalarType::Float64) &&
-         "rand: unsupported dtype (only Float32/Float64)");
+  return lookup<CreateFn>("aten::rand", c10::DispatchKey::CPU)(
+      std::move(sizes), dtype);
+}
 
-  auto out = c10::Tensor::empty(std::move(sizes), dtype);
-  int64_t n = out.numel();
+c10::Tensor arange(
+    double start, double end, double step, c10::ScalarType dtype) {
+  return lookup<ArangeFn>("aten::arange", c10::DispatchKey::CPU)(
+      start, end, step, dtype);
+}
 
-  // Local engine and distribution — no global state.
-  std::random_device rd;
-  std::mt19937 gen(rd());
+c10::Tensor eye(int64_t n, c10::ScalarType dtype) {
+  return lookup<EyeFn>("aten::eye", c10::DispatchKey::CPU)(n, dtype);
+}
 
-  switch (dtype) {
-    case c10::ScalarType::Float32: {
-      std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-      float* p = out.data_ptr<float>();
-      for (int64_t i = 0; i < n; ++i) p[i] = dist(gen);
-      break;
-    }
-    case c10::ScalarType::Float64: {
-      std::uniform_real_distribution<double> dist(0.0, 1.0);
-      double* p = out.data_ptr<double>();
-      for (int64_t i = 0; i < n; ++i) p[i] = dist(gen);
-      break;
-    }
-    default:
-      assert(false && "rand: unreachable");
+// ============================================================================
+// Unary ops
+// ============================================================================
+
+#define UNARY_OP(NAME)                                           \
+  c10::Tensor NAME(const c10::Tensor& a) {                      \
+    assert(a.defined() && #NAME ": input undefined");            \
+    return lookup<UnaryFn>("aten::" #NAME, dk(a))(a);            \
   }
 
-  return out;
-}
+UNARY_OP(neg)
+UNARY_OP(relu)
+UNARY_OP(abs)
+UNARY_OP(exp)
+UNARY_OP(log)
+UNARY_OP(sqrt)
+UNARY_OP(tanh)
+UNARY_OP(sigmoid)
+UNARY_OP(gelu)
+
+#undef UNARY_OP
 
 // ============================================================================
-// Unary ops — delegate to TensorIterator
+// Binary ops
 // ============================================================================
 
-c10::Tensor neg(const c10::Tensor& a) {
-  assert(a.defined() && "neg: input tensor is undefined");
-  return cpu_kernel_unary(a, [](auto x) { return -x; });
-}
+#define BINARY_OP(NAME)                                              \
+  c10::Tensor NAME(const c10::Tensor& a, const c10::Tensor& b) {    \
+    assert(a.defined() && #NAME ": first input undefined");          \
+    assert(b.defined() && #NAME ": second input undefined");         \
+    return lookup<BinaryFn>("aten::" #NAME, dk(a, b))(a, b);        \
+  }
 
-c10::Tensor relu(const c10::Tensor& a) {
-  assert(a.defined() && "relu: input tensor is undefined");
-  return cpu_kernel_unary(a, [](auto x) {
-    using T = decltype(x);
-    return x > T(0) ? x : T(0);
-  });
-}
+BINARY_OP(add)
+BINARY_OP(sub)
+BINARY_OP(mul)
+BINARY_OP(div)
+BINARY_OP(pow)
 
-c10::Tensor abs(const c10::Tensor& a) {
-  assert(a.defined() && "abs: input tensor is undefined");
-  return cpu_kernel_unary(a, [](auto x) {
-    using T = decltype(x);
-    return x < T(0) ? -x : x;
-  });
-}
+#undef BINARY_OP
 
 // ============================================================================
-// Binary ops — delegate to TensorIterator
+// Scalar ops
 // ============================================================================
 
-c10::Tensor add(const c10::Tensor& a, const c10::Tensor& b) {
-  assert(a.defined() && "add: first input tensor is undefined");
-  assert(b.defined() && "add: second input tensor is undefined");
-  return cpu_kernel_binary(a, b, [](auto x, auto y) { return x + y; });
-}
+#define SCALAR_OP(NAME)                                              \
+  c10::Tensor NAME(const c10::Tensor& a, double scalar) {           \
+    assert(a.defined() && #NAME ": input undefined");                \
+    return lookup<ScalarFn>("aten::" #NAME, dk(a))(a, scalar);       \
+  }
 
-c10::Tensor sub(const c10::Tensor& a, const c10::Tensor& b) {
-  assert(a.defined() && "sub: first input tensor is undefined");
-  assert(b.defined() && "sub: second input tensor is undefined");
-  return cpu_kernel_binary(a, b, [](auto x, auto y) { return x - y; });
-}
+SCALAR_OP(add_scalar)
+SCALAR_OP(sub_scalar)
+SCALAR_OP(mul_scalar)
+SCALAR_OP(div_scalar)
 
-c10::Tensor mul(const c10::Tensor& a, const c10::Tensor& b) {
-  assert(a.defined() && "mul: first input tensor is undefined");
-  assert(b.defined() && "mul: second input tensor is undefined");
-  return cpu_kernel_binary(a, b, [](auto x, auto y) { return x * y; });
-}
+#undef SCALAR_OP
 
 // ============================================================================
-// Reduce — sum (does NOT use TensorIterator)
+// Reduce ops
 // ============================================================================
 
 c10::Tensor sum(const c10::Tensor& a) {
-  assert(a.defined() && "sum: input tensor is undefined");
+  assert(a.defined() && "sum: input undefined");
+  return lookup<ReduceFn>("aten::sum", dk(a))(a);
+}
 
-  auto dtype = a.dtype();
-  assert((dtype == c10::ScalarType::Float32 ||
-          dtype == c10::ScalarType::Float64) &&
-         "sum: unsupported dtype (only Float32/Float64)");
-
-  // Scalar tensor: sizes={}, ndim==0, numel==1.
-  auto out = c10::Tensor::empty({}, dtype);
-  int64_t n = a.numel();
-
-  switch (dtype) {
-    case c10::ScalarType::Float32: {
-      const float* p = a.data_ptr<float>();
-      float acc = 0.0f;
-      for (int64_t i = 0; i < n; ++i) acc += p[i];
-      out.data_ptr<float>()[0] = acc;
-      break;
-    }
-    case c10::ScalarType::Float64: {
-      const double* p = a.data_ptr<double>();
-      double acc = 0.0;
-      for (int64_t i = 0; i < n; ++i) acc += p[i];
-      out.data_ptr<double>()[0] = acc;
-      break;
-    }
-    default:
-      assert(false && "sum: unreachable");
-  }
-
-  return out;
+c10::Tensor mean(const c10::Tensor& a) {
+  assert(a.defined() && "mean: input undefined");
+  return lookup<ReduceFn>("aten::mean", dk(a))(a);
 }
 
 // ============================================================================
-// Linear algebra — matmul (does NOT use TensorIterator)
+// Shape ops — metadata only, no dispatch needed
+// ============================================================================
+
+c10::Tensor transpose(const c10::Tensor& a, int64_t dim0, int64_t dim1) {
+  assert(a.defined() && "transpose: input undefined");
+  int64_t ndim = a.ndim();
+  assert(dim0 >= 0 && dim0 < ndim && "transpose: dim0 out of range");
+  assert(dim1 >= 0 && dim1 < ndim && "transpose: dim1 out of range");
+
+  if (dim0 == dim1) return a;
+
+  // Copy sizes and strides, swap the two dimensions
+  auto sizes_span = a.sizes();
+  auto strides_span = a.strides();
+  std::vector<int64_t> new_sizes(sizes_span.begin(), sizes_span.end());
+  std::vector<int64_t> new_strides(strides_span.begin(), strides_span.end());
+
+  std::swap(new_sizes[dim0], new_sizes[dim1]);
+  std::swap(new_strides[dim0], new_strides[dim1]);
+
+  // Create a new TensorImpl sharing the same Storage
+  auto impl = c10::make_intrusive<c10::TensorImpl>(
+      a.storage(), a.dtype(), std::move(new_sizes), std::move(new_strides),
+      a.storage_offset());
+
+  return c10::Tensor(std::move(impl));
+}
+
+c10::Tensor reshape(const c10::Tensor& a, std::vector<int64_t> shape) {
+  assert(a.defined() && "reshape: input undefined");
+
+  // Handle -1: infer one dimension
+  int64_t total = a.numel();
+  int64_t infer_idx = -1;
+  int64_t known_product = 1;
+  for (size_t i = 0; i < shape.size(); ++i) {
+    if (shape[i] == -1) {
+      assert(infer_idx == -1 && "reshape: at most one -1 allowed");
+      infer_idx = static_cast<int64_t>(i);
+    } else {
+      assert(shape[i] > 0 && "reshape: dimensions must be positive (or -1)");
+      known_product *= shape[i];
+    }
+  }
+  if (infer_idx >= 0) {
+    assert(known_product > 0 && total % known_product == 0 &&
+           "reshape: cannot infer dimension");
+    shape[infer_idx] = total / known_product;
+  }
+
+  // Verify total elements match
+  int64_t new_total = 1;
+  for (auto s : shape) new_total *= s;
+  assert(new_total == total && "reshape: total elements must match");
+
+  // If not contiguous, make contiguous first
+  c10::Tensor src = a.is_contiguous() ? a : contiguous(a);
+
+  // Compute default strides for the new shape
+  std::vector<int64_t> new_strides(shape.size());
+  if (!shape.empty()) {
+    new_strides.back() = 1;
+    for (int64_t i = static_cast<int64_t>(shape.size()) - 2; i >= 0; --i) {
+      new_strides[i] = new_strides[i + 1] * shape[i + 1];
+    }
+  }
+
+  auto impl = c10::make_intrusive<c10::TensorImpl>(
+      src.storage(), src.dtype(), std::move(shape), std::move(new_strides),
+      src.storage_offset());
+
+  return c10::Tensor(std::move(impl));
+}
+
+c10::Tensor view(const c10::Tensor& a, std::vector<int64_t> shape) {
+  assert(a.is_contiguous() && "view: input must be contiguous");
+  return reshape(a, std::move(shape));
+}
+
+c10::Tensor contiguous(const c10::Tensor& a) {
+  assert(a.defined() && "contiguous: input undefined");
+  if (a.is_contiguous()) return a;
+  return lookup<UnaryFn>("aten::contiguous", dk(a))(a);
+}
+
+// ============================================================================
+// Linear algebra
 // ============================================================================
 
 c10::Tensor matmul(const c10::Tensor& a, const c10::Tensor& b) {
-  assert(a.defined() && "matmul: first input tensor is undefined");
-  assert(b.defined() && "matmul: second input tensor is undefined");
-  assert(a.ndim() == 2 && "matmul: first input must be 2D");
-  assert(b.ndim() == 2 && "matmul: second input must be 2D");
-  assert(a.size(1) == b.size(0) && "matmul: inner dimensions must match");
-  assert(a.dtype() == b.dtype() && "matmul: dtype mismatch");
-
-  auto dtype = a.dtype();
-  assert((dtype == c10::ScalarType::Float32 ||
-          dtype == c10::ScalarType::Float64) &&
-         "matmul: unsupported dtype (only Float32/Float64)");
-
-  int64_t M = a.size(0);
-  int64_t K = a.size(1);
-  int64_t N = b.size(1);
-
-  // Output is (M, N).  Allocated via Tensor::empty → CPUAllocator which
-  // zero-initializes via std::memset, so the accumulation loop below
-  // starts from zero without explicit initialization.
-  auto out = c10::Tensor::empty({M, N}, dtype);
-
-  switch (dtype) {
-    case c10::ScalarType::Float32: {
-      const float* ap = a.data_ptr<float>();
-      const float* bp = b.data_ptr<float>();
-      float* op = out.data_ptr<float>();
-      for (int64_t i = 0; i < M; ++i) {
-        for (int64_t j = 0; j < N; ++j) {
-          float acc = 0.0f;
-          for (int64_t k = 0; k < K; ++k) {
-            acc += ap[i * K + k] * bp[k * N + j];
-          }
-          op[i * N + j] = acc;
-        }
-      }
-      break;
-    }
-    case c10::ScalarType::Float64: {
-      const double* ap = a.data_ptr<double>();
-      const double* bp = b.data_ptr<double>();
-      double* op = out.data_ptr<double>();
-      for (int64_t i = 0; i < M; ++i) {
-        for (int64_t j = 0; j < N; ++j) {
-          double acc = 0.0;
-          for (int64_t k = 0; k < K; ++k) {
-            acc += ap[i * K + k] * bp[k * N + j];
-          }
-          op[i * N + j] = acc;
-        }
-      }
-      break;
-    }
-    default:
-      assert(false && "matmul: unreachable");
-  }
-
-  return out;
+  assert(a.defined() && "matmul: first input undefined");
+  assert(b.defined() && "matmul: second input undefined");
+  return lookup<BinaryFn>("aten::matmul", dk(a, b))(a, b);
 }
 
 }  // namespace aten
