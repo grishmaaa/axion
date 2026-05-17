@@ -4,6 +4,7 @@
 #include <numeric>
 #include <cstdint>
 
+#include "c10/core/AutogradMetaInterface.h"
 #include "c10/core/DispatchKey.h"
 #include "c10/core/Storage.h"
 #include "c10/core/ScalarType.h"
@@ -83,10 +84,21 @@ class C10_API TensorImpl : public intrusive_ptr_target {
   bool is_contiguous() const noexcept { return is_contiguous_; }
 
   /**
-   * Placeholder for future Autograd support.
+   * Autograd metadata slot — nullable, zero-cost when unused.
+   * Owned via unique_ptr. Created lazily when requires_grad is set.
    */
-  void* autograd_meta() const noexcept { return autograd_meta_; }
-  void set_autograd_meta(void* meta) noexcept { autograd_meta_ = meta; }
+  AutogradMetaInterface* autograd_meta() const noexcept {
+    return autograd_meta_.get();
+  }
+  void set_autograd_meta(
+      std::unique_ptr<AutogradMetaInterface> meta) noexcept {
+    autograd_meta_ = std::move(meta);
+  }
+
+  /// Whether this tensor requires gradient computation.
+  bool requires_grad() const noexcept {
+    return autograd_meta_ && autograd_meta_->requires_grad_;
+  }
 
  private:
   void refresh_numel() noexcept;
@@ -102,8 +114,8 @@ class C10_API TensorImpl : public intrusive_ptr_target {
   bool is_contiguous_;
   DispatchKeySet key_set_;
 
-  // Future Autograd support. Zero overhead on inference.
-  void* autograd_meta_ = nullptr;
+  /// Autograd metadata. Null for inference-only tensors (zero overhead).
+  std::unique_ptr<AutogradMetaInterface> autograd_meta_;
 };
 
 } // namespace c10

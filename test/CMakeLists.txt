@@ -18,3 +18,5 @@ include(GoogleTest)
 # Pull in per-layer test directories.
 add_subdirectory(c10)
 add_subdirectory(aten)
+add_subdirectory(autograd)
+add_subdirectory(axion)

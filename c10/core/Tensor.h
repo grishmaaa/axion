@@ -148,6 +148,19 @@ class C10_API Tensor {
   /// True if the tensor is contiguous in memory (row-major, no gaps).
   bool is_contiguous() const noexcept { return impl_->is_contiguous(); }
 
+  /// Whether this tensor participates in gradient computation.
+  bool requires_grad() const noexcept { return impl_->requires_grad(); }
+
+  /// Raw access to autograd metadata (may be null).
+  AutogradMetaInterface* autograd_meta() const noexcept {
+    return impl_->autograd_meta();
+  }
+
+  /// Access the underlying TensorImpl (non-const, for autograd code).
+  TensorImpl* unsafeGetTensorImplRaw() const noexcept {
+    return impl_.get();
+  }
+
   /// Size along a specific dimension.
   int64_t size(int64_t dim) const noexcept {
     assert(dim >= 0 && dim < ndim() && "dimension out of range");
