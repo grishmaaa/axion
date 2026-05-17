@@ -10,6 +10,12 @@
 #include "axion/nn/Linear.h"
 #include "axion/nn/Sequential.h"
 #include "axion/nn/Activations.h"
+#include "axion/nn/LayerNorm.h"
+#include "axion/nn/Dropout.h"
+#include "axion/nn/Embedding.h"
+#include "axion/nn/Softmax.h"
+#include "axion/nn/Attention.h"
+#include "axion/nn/TransformerBlock.h"
 #include "axion/nn/Loss.h"
 #include "axion/optim/SGD.h"
 #include "axion/optim/Adam.h"
@@ -357,6 +363,279 @@ TEST(EndToEnd, ClassificationTraining) {
 
   EXPECT_TRUE(converged)
       << "Classification training didn't converge after 5 attempts";
+}
+
+// ============================================================================
+// LayerNorm tests
+// ============================================================================
+
+TEST(LayerNorm, OutputZeroMeanUnitVar) {
+  auto ln = nn::LayerNorm(4);
+  auto input = c10::Tensor::empty({2, 4}, c10::ScalarType::Float32);
+  float* ip = input.data_ptr<float>();
+  ip[0]=1; ip[1]=2; ip[2]=3; ip[3]=4;
+  ip[4]=10; ip[5]=20; ip[6]=30; ip[7]=40;
+
+  auto output = ln.forward(input);
+  const float* op = output.data_ptr<float>();
+
+  // Each row should have mean ≈ 0 (beta=0) and std ≈ 1 (gamma=1)
+  for (int row = 0; row < 2; ++row) {
+    float mean = 0;
+    for (int j = 0; j < 4; ++j) mean += op[row * 4 + j];
+    mean /= 4;
+    EXPECT_NEAR(mean, 0.0f, 1e-4f) << "Row " << row;
+
+    float var = 0;
+    for (int j = 0; j < 4; ++j) {
+      float d = op[row * 4 + j] - mean;
+      var += d * d;
+    }
+    var /= 4;
+    EXPECT_NEAR(var, 1.0f, 0.1f) << "Row " << row;
+  }
+}
+
+TEST(LayerNorm, HasParameters) {
+  auto ln = nn::LayerNorm(16);
+  auto params = ln.parameters();
+  EXPECT_EQ(params.size(), 2u);  // gamma + beta
+}
+
+TEST(LayerNorm, GradientFlows) {
+  auto ln = nn::LayerNorm(4);
+  auto input = aten::full({2, 4}, 1.0f);
+  autograd::set_requires_grad(input, true);
+
+  auto output = ln.forward(input);
+  auto loss = autograd::mean(output);
+  autograd::Engine::backward(loss);
+
+  auto grad = autograd::get_grad(input);
+  EXPECT_TRUE(grad.defined());
+  EXPECT_EQ(grad.numel(), 8);
+}
+
+// ============================================================================
+// Dropout tests
+// ============================================================================
+
+TEST(Dropout, EvalModeIsIdentity) {
+  auto drop = nn::Dropout(0.5f);
+  drop.eval();  // switch to eval mode
+
+  auto input = aten::ones({4, 4});
+  auto output = drop.forward(input);
+
+  // In eval mode, output should be identical to input
+  const float* ip = input.data_ptr<float>();
+  const float* op = output.data_ptr<float>();
+  for (int i = 0; i < 16; ++i) {
+    EXPECT_FLOAT_EQ(ip[i], op[i]);
+  }
+}
+
+TEST(Dropout, TrainingModeZerosSomeElements) {
+  auto drop = nn::Dropout(0.5f);
+  drop.train();
+
+  auto input = aten::ones({100, 100});
+  auto output = drop.forward(input);
+
+  // Count zeros — with p=0.5, roughly half should be 0
+  const float* op = output.data_ptr<float>();
+  int zeros = 0;
+  for (int i = 0; i < 10000; ++i) {
+    if (op[i] == 0.0f) zeros++;
+  }
+  // Should be roughly 5000 ± 500
+  EXPECT_GT(zeros, 3000);
+  EXPECT_LT(zeros, 7000);
+}
+
+TEST(Dropout, ZeroProbIsIdentity) {
+  auto drop = nn::Dropout(0.0f);
+  drop.train();
+
+  auto input = aten::full({4, 4}, 3.0f);
+  auto output = drop.forward(input);
+
+  const float* op = output.data_ptr<float>();
+  for (int i = 0; i < 16; ++i) {
+    EXPECT_FLOAT_EQ(op[i], 3.0f);
+  }
+}
+
+// ============================================================================
+// Embedding tests
+// ============================================================================
+
+TEST(Embedding, OutputShape) {
+  auto emb = nn::Embedding(10, 4);  // vocab=10, dim=4
+
+  auto indices = c10::Tensor::empty({2, 3}, c10::ScalarType::Float32);
+  float* ip = indices.data_ptr<float>();
+  ip[0]=0; ip[1]=1; ip[2]=2;
+  ip[3]=3; ip[4]=4; ip[5]=5;
+
+  auto output = emb.forward(indices);
+  // Output: (2, 3*4) = (2, 12) — flattened seq*dim
+  EXPECT_EQ(output.size(0), 2);
+  EXPECT_EQ(output.size(1), 12);
+}
+
+TEST(Embedding, HasParameters) {
+  auto emb = nn::Embedding(100, 32);
+  auto params = emb.parameters();
+  EXPECT_EQ(params.size(), 1u);  // just the weight table
+}
+
+TEST(Embedding, LookupCorrect) {
+  auto emb = nn::Embedding(3, 2);  // 3 words, 2-dim
+
+  // Manually set weights for testing
+  float* wp = emb.parameters()[0]->data().data_ptr<float>();
+  wp[0]=1; wp[1]=2;   // embedding[0] = [1, 2]
+  wp[2]=3; wp[3]=4;   // embedding[1] = [3, 4]
+  wp[4]=5; wp[5]=6;   // embedding[2] = [5, 6]
+
+  auto indices = c10::Tensor::empty({1, 3}, c10::ScalarType::Float32);
+  float* ip = indices.data_ptr<float>();
+  ip[0]=2; ip[1]=0; ip[2]=1;  // look up embeddings 2, 0, 1
+
+  auto output = emb.forward(indices);
+  const float* op = output.data_ptr<float>();
+  // output should be [5,6, 1,2, 3,4]
+  EXPECT_FLOAT_EQ(op[0], 5.0f);
+  EXPECT_FLOAT_EQ(op[1], 6.0f);
+  EXPECT_FLOAT_EQ(op[2], 1.0f);
+  EXPECT_FLOAT_EQ(op[3], 2.0f);
+  EXPECT_FLOAT_EQ(op[4], 3.0f);
+  EXPECT_FLOAT_EQ(op[5], 4.0f);
+}
+
+// ============================================================================
+// Softmax tests
+// ============================================================================
+
+TEST(Softmax, RowsSumToOne) {
+  auto input = c10::Tensor::empty({3, 4}, c10::ScalarType::Float32);
+  float* ip = input.data_ptr<float>();
+  ip[0]=1; ip[1]=2; ip[2]=3; ip[3]=4;
+  ip[4]=0; ip[5]=0; ip[6]=0; ip[7]=0;
+  ip[8]=-1; ip[9]=-2; ip[10]=5; ip[11]=0;
+
+  auto output = nn::functional::softmax(input);
+  const float* op = output.data_ptr<float>();
+
+  for (int row = 0; row < 3; ++row) {
+    float sum = 0;
+    for (int j = 0; j < 4; ++j) {
+      sum += op[row * 4 + j];
+      EXPECT_GE(op[row * 4 + j], 0.0f);  // all non-negative
+    }
+    EXPECT_NEAR(sum, 1.0f, 1e-5f) << "Row " << row;
+  }
+}
+
+TEST(Softmax, UniformInputGivesUniform) {
+  auto input = aten::full({2, 5}, 1.0f);
+  auto output = nn::functional::softmax(input);
+  const float* op = output.data_ptr<float>();
+
+  for (int i = 0; i < 10; ++i) {
+    EXPECT_NEAR(op[i], 0.2f, 1e-5f);  // 1/5 = 0.2
+  }
+}
+
+TEST(Softmax, GradientFlows) {
+  auto input = aten::full({2, 3}, 1.0f);
+  autograd::set_requires_grad(input, true);
+
+  auto output = nn::functional::softmax(input);
+  auto loss = autograd::mean(output);
+  autograd::Engine::backward(loss);
+
+  auto grad = autograd::get_grad(input);
+  EXPECT_TRUE(grad.defined());
+  EXPECT_EQ(grad.numel(), 6);
+}
+
+// ============================================================================
+// CausalSelfAttention tests
+// ============================================================================
+
+TEST(Attention, OutputShape) {
+  auto attn = nn::CausalSelfAttention(/*d_model=*/16, /*n_heads=*/4);
+  auto input = aten::ones({8, 16});  // seq_len=8, d_model=16
+  auto output = attn.forward(input);
+  EXPECT_EQ(output.size(0), 8);
+  EXPECT_EQ(output.size(1), 16);
+}
+
+TEST(Attention, HasParameters) {
+  auto attn = nn::CausalSelfAttention(16, 4);
+  auto params = attn.parameters();
+  // qkv_proj (weight) + out_proj (weight) = 2 params
+  EXPECT_EQ(params.size(), 2u);
+}
+
+TEST(Attention, CausalMasking) {
+  // With seq_len=1, attention should just pass through (no masking needed)
+  auto attn = nn::CausalSelfAttention(8, 2);
+  attn.eval();
+  auto input = aten::ones({1, 8});
+  auto output = attn.forward(input);
+  EXPECT_EQ(output.size(0), 1);
+  EXPECT_EQ(output.size(1), 8);
+}
+
+// ============================================================================
+// TransformerBlock tests
+// ============================================================================
+
+TEST(TransformerBlock, OutputShape) {
+  auto block = nn::TransformerBlock(/*d_model=*/16, /*n_heads=*/4);
+  block.eval();  // no dropout
+  auto input = aten::ones({4, 16});  // seq_len=4, d_model=16
+  auto output = block.forward(input);
+  EXPECT_EQ(output.size(0), 4);
+  EXPECT_EQ(output.size(1), 16);
+}
+
+TEST(TransformerBlock, HasParameters) {
+  auto block = nn::TransformerBlock(16, 4);
+  auto params = block.parameters();
+  // ln1: 2 (gamma, beta)
+  // attn: qkv_proj(1) + out_proj(1) = 2
+  // ln2: 2 (gamma, beta)
+  // ffn1: 1, ffn2: 1
+  // Total: 8
+  EXPECT_EQ(params.size(), 8u);
+}
+
+TEST(TransformerBlock, ResidualConnection) {
+  // Verify output != input (the block transforms)
+  // and that the shape is preserved
+  auto block = nn::TransformerBlock(8, 2);
+  block.eval();
+  auto input = aten::rand({2, 8});  // varied input so LayerNorm doesn't zero out
+  auto output = block.forward(input);
+
+  EXPECT_EQ(output.size(0), 2);
+  EXPECT_EQ(output.size(1), 8);
+
+  // Output should differ from input (non-trivial transformation)
+  const float* ip = input.data_ptr<float>();
+  const float* op = output.data_ptr<float>();
+  bool different = false;
+  for (int i = 0; i < 16; ++i) {
+    if (std::abs(ip[i] - op[i]) > 1e-6f) {
+      different = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(different) << "TransformerBlock output should differ from input";
 }
 
 }  // namespace
