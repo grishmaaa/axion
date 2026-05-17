@@ -56,10 +56,17 @@ inline void set_requires_grad(c10::Tensor& t, bool requires_grad) {
   meta.requires_grad_ = requires_grad;
 }
 
-/// Get the gradient of a tensor.
+/// Get the gradient of a tensor (mutable reference).
 inline c10::Tensor& mutable_grad(const c10::Tensor& t) {
   auto* meta = get_autograd_meta(t);
   assert(meta && "mutable_grad: tensor has no autograd metadata");
+  return meta->grad_;
+}
+
+/// Get the gradient of a tensor (const access).
+inline const c10::Tensor& get_grad(const c10::Tensor& t) {
+  auto* meta = get_autograd_meta(t);
+  assert(meta && "get_grad: tensor has no autograd metadata");
   return meta->grad_;
 }
 
